@@ -1,0 +1,36 @@
+{
+  "segment_manifest_path": "data/manifests/swoon_sample_1_segments.jsonl",
+  "artifact_root": "artifacts/evaluations/swoon_sample_1_smoke",
+  "summary": {
+    "segment_count": 1,
+    "positive_segment_count": 1,
+    "negative_segment_count": 0,
+    "tp": 0,
+    "fn": 1,
+    "fp": 0,
+    "tn": 0,
+    "precision": null,
+    "recall": 0.0,
+    "false_positive_rate": null,
+    "average_detection_delay_ms": null
+  },
+  "results": [
+    {
+      "segment_id": "101-1_cam01_swoon01_place03_day_spring_fall_positive",
+      "sample_id": "101-1_cam01_swoon01_place03_day_spring",
+      "label": "fall",
+      "segment_role": "fall_positive",
+      "status": "fn",
+      "matched": false,
+      "predicted_event_count": 0,
+      "matched_event_count": 0,
+      "first_prediction_ms": null,
+      "first_matched_prediction_ms": null,
+      "detection_delay_ms": null,
+      "tracking_log_path": "artifacts/evaluations/swoon_sample_1_smoke/101-1_cam01_swoon01_place03_day_spring_fall_positive/logs/tracking.jsonl",
+      "pose_log_path": "artifacts/evaluations/swoon_sample_1_smoke/101-1_cam01_swoon01_place03_day_spring_fall_positive/logs/pose.jsonl",
+      "event_log_path": "artifacts/evaluations/swoon_sample_1_smoke/101-1_cam01_swoon01_place03_day_spring_fall_positive/events/events.jsonl",
+      "events": []
+    }
+  ]
+}

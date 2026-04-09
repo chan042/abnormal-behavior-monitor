@@ -1,0 +1,8 @@
+camera_id: cam_rtsp_01
+name: ward_corridor_rtsp
+source_type: rtsp
+source: rtsp://username:password@127.0.0.1:8554/ward_corridor
+enabled: true
+target_fps: 8
+frame_width: 1280
+frame_height: 720

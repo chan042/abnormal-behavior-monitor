@@ -1,0 +1,9 @@
+camera_id: cam_live_01
+name: iphone_continuity_camera
+source_type: camera
+source: "3"
+enabled: true
+target_fps: 6
+frame_width: 1280
+frame_height: 720
+fall_threshold_profile: cam_live_01

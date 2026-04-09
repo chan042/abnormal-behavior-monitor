@@ -1,0 +1,227 @@
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+
+from ..config import CameraConfig
+from ..paths import PROJECT_ROOT
+from ..pose.types import PoseLandmarkRecord, PoseObservation
+from ..rules.fall import FallEventEngine, FallThresholds
+from ..tracking.types import TrackObservation
+from ..visualization.overlay_renderer import render_overlay_video_for_camera
+from .swoon_dataset import EvaluationSegment, load_segment_manifest
+
+
+@dataclass
+class ReviewTarget:
+    review_label: str
+    segment_id: str
+
+
+def load_review_targets(
+    tuning_summary_path: Path,
+    candidate_key: str,
+    *,
+    include_tp: bool = True,
+    include_fp: bool = True,
+    max_segments: Optional[int] = None,
+) -> List[ReviewTarget]:
+    payload = json.loads(tuning_summary_path.read_text(encoding="utf-8"))
+    candidate = payload[candidate_key]
+    targets: List[ReviewTarget] = []
+    if include_tp:
+        targets.extend(
+            ReviewTarget(review_label="tp", segment_id=segment_id)
+            for segment_id in candidate.get("tp_segments", [])
+        )
+    if include_fp:
+        targets.extend(
+            ReviewTarget(review_label="fp", segment_id=segment_id)
+            for segment_id in candidate.get("fp_segments", [])
+        )
+    if max_segments is not None:
+        targets = targets[:max_segments]
+    return targets
+
+
+def build_swoon_review_set(
+    *,
+    segment_manifest_path: Path,
+    tuning_summary_path: Path,
+    candidate_key: str,
+    threshold_path: Path,
+    evaluation_artifact_root: Path,
+    output_root: Path,
+    review_output_path: Path,
+    include_tp: bool = True,
+    include_fp: bool = True,
+    max_segments: Optional[int] = None,
+    target_fps: int = 5,
+    frame_width: int = 1280,
+    frame_height: int = 720,
+) -> Dict[str, object]:
+    segments = {
+        segment.segment_id: segment
+        for segment in load_segment_manifest(segment_manifest_path)
+    }
+    targets = load_review_targets(
+        tuning_summary_path,
+        candidate_key,
+        include_tp=include_tp,
+        include_fp=include_fp,
+        max_segments=max_segments,
+    )
+    output_root.mkdir(parents=True, exist_ok=True)
+    review_output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    records: List[Dict[str, object]] = []
+    for target in targets:
+        segment = segments[target.segment_id]
+        segment_root = evaluation_artifact_root / segment.segment_id
+        tracking_log_path = segment_root / "logs" / "tracking.jsonl"
+        pose_log_path = segment_root / "logs" / "pose.jsonl"
+
+        review_segment_root = output_root / target.review_label / segment.segment_id
+        events_root = review_segment_root / "events"
+        overlays_root = review_segment_root / "overlays"
+        event_log_path = events_root / "events.jsonl"
+        overlay_path = overlays_root / f"{segment.segment_id}_overlay.mp4"
+        thresholds = FallThresholds.from_yaml(
+            threshold_path,
+            profile=segment.fall_threshold_profile,
+        )
+
+        replayed_events = replay_fall_events_for_segment(
+            tracking_log_path=tracking_log_path,
+            pose_log_path=pose_log_path,
+            thresholds=thresholds,
+        )
+        _write_jsonl(replayed_events, event_log_path)
+
+        camera_config = CameraConfig(
+            camera_id=f"review_{segment.sample_id}",
+            name=segment.segment_id,
+            source_type="file",
+            source=str((PROJECT_ROOT / segment.video_path).resolve()),
+            enabled=True,
+            target_fps=target_fps,
+            frame_width=frame_width,
+            frame_height=frame_height,
+        )
+        overlay_summary = render_overlay_video_for_camera(
+            camera_config=camera_config,
+            tracking_log_path=tracking_log_path,
+            pose_log_path=pose_log_path,
+            event_log_path=event_log_path,
+            output_path=overlay_path,
+            start_ms=segment.start_ms,
+            end_ms=segment.end_ms,
+        )
+
+        records.append(
+            {
+                "review_label": target.review_label,
+                "segment_id": segment.segment_id,
+                "sample_id": segment.sample_id,
+                "camera_id": segment.camera_id,
+                "season": segment.season,
+                "label": segment.label,
+                "segment_role": segment.segment_role,
+                "video_path": segment.video_path,
+                "xml_path": segment.xml_path,
+                "tracking_log_path": str(tracking_log_path),
+                "pose_log_path": str(pose_log_path),
+                "event_log_path": str(event_log_path),
+                "overlay_path": str(overlay_path),
+                "event_count": len(replayed_events),
+                "overlay_summary": overlay_summary,
+            }
+        )
+
+    _write_jsonl(records, review_output_path)
+    return {
+        "review_output_path": str(review_output_path),
+        "output_root": str(output_root),
+        "targets_written": len(records),
+        "candidate_key": candidate_key,
+    }
+
+
+def replay_fall_events_for_segment(
+    *,
+    tracking_log_path: Path,
+    pose_log_path: Path,
+    thresholds: FallThresholds,
+) -> List[Dict[str, object]]:
+    tracking_by_key: Dict[Tuple[int, int], TrackObservation] = {}
+    with tracking_log_path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            line = line.strip()
+            if not line:
+                continue
+            payload = json.loads(line)
+            observation = TrackObservation(
+                frame_index=int(payload["frame_index"]),
+                timestamp_ms=int(payload["timestamp_ms"]),
+                track_id=int(payload["track_id"]),
+                class_id=int(payload["class_id"]),
+                class_name=str(payload["class_name"]),
+                confidence=float(payload["confidence"]),
+                x1=float(payload["bbox"][0]),
+                y1=float(payload["bbox"][1]),
+                x2=float(payload["bbox"][2]),
+                y2=float(payload["bbox"][3]),
+            )
+            tracking_by_key[(observation.timestamp_ms, observation.track_id)] = observation
+
+    ordered_pairs: List[Tuple[TrackObservation, PoseObservation]] = []
+    with pose_log_path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            line = line.strip()
+            if not line:
+                continue
+            payload = json.loads(line)
+            key = (int(payload["timestamp_ms"]), int(payload["track_id"]))
+            track_observation = tracking_by_key.get(key)
+            if track_observation is None:
+                continue
+            pose_observation = PoseObservation(
+                frame_index=int(payload["frame_index"]),
+                timestamp_ms=int(payload["timestamp_ms"]),
+                track_id=int(payload["track_id"]),
+                confidence=float(payload["pose_confidence"]),
+                landmarks=[
+                    PoseLandmarkRecord(
+                        index=int(landmark["index"]),
+                        x=float(landmark["x"]),
+                        y=float(landmark["y"]),
+                        z=float(landmark["z"]),
+                        visibility=float(landmark["visibility"]),
+                    )
+                    for landmark in payload["pose_landmarks"]
+                ],
+            )
+            ordered_pairs.append((track_observation, pose_observation))
+
+    ordered_pairs.sort(key=lambda item: (item[0].timestamp_ms, item[0].track_id))
+    engine = FallEventEngine(thresholds)
+    events: List[Dict[str, object]] = []
+    for track_observation, pose_observation in ordered_pairs:
+        events.extend(
+            event.to_dict()
+            for event in engine.update(
+                camera_id="review",
+                observation=track_observation,
+                pose_observation=pose_observation,
+            )
+        )
+    return events
+
+
+def _write_jsonl(items: Iterable[Dict[str, object]], path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        for item in items:
+            handle.write(json.dumps(item, ensure_ascii=True) + "\n")

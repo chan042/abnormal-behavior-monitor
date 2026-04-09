@@ -1,0 +1,9 @@
+camera_id: cam_01
+name: ward_corridor_a
+source_type: file
+source: data/samples/ward_corridor_a.mp4
+enabled: true
+target_fps: 8
+frame_width: 1280
+frame_height: 720
+fall_threshold_profile: cam_01

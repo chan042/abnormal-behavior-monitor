@@ -1,0 +1,9 @@
+camera_id: cam_01
+rois:
+  - roi_id: ward_corridor_a
+    name: Ward Corridor A
+    points:
+      - [120, 80]
+      - [1160, 80]
+      - [1160, 640]
+      - [120, 640]

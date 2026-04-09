@@ -1,0 +1,11 @@
+event_type: fall_suspected
+center_drop_pixels: 30
+angle_change_degrees: 45
+horizontal_ratio_threshold: 1.2
+no_motion_seconds: 4
+cooldown_seconds: 30
+max_motion_pixels: 12
+fall_window_seconds: 1.0
+min_pose_confidence: 0.3
+horizontal_angle_threshold: 60
+upright_angle_threshold: 25

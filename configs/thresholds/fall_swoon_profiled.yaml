@@ -1,0 +1,39 @@
+event_type: fall_suspected
+center_drop_pixels: 20
+center_drop_height_ratio: 0.25
+angle_change_degrees: 10
+horizontal_ratio_threshold: 0.7
+horizontal_persistence_seconds: 0.4
+no_motion_seconds: 0.2
+cooldown_seconds: 30
+max_confirmation_seconds: 25
+max_motion_pixels: 30
+fall_window_seconds: 1.0
+min_pose_confidence: 0.3
+horizontal_angle_threshold: 30
+upright_angle_threshold: 25
+min_forward_drop_pixels: 0
+min_forward_drop_ratio: 0
+min_confirmation_angle_change_degrees: 0
+min_episode_peak_angle_degrees: 0
+
+profiles:
+  cam01_spring:
+    horizontal_ratio_threshold: 1.0
+  cam01_summer:
+    horizontal_ratio_threshold: 0.8
+    horizontal_angle_threshold: 40
+    min_forward_drop_ratio: 0.01
+  cam02_summer:
+    horizontal_ratio_threshold: 1.0
+    horizontal_angle_threshold: 50
+    horizontal_persistence_seconds: 0.6
+    min_forward_drop_ratio: 0.01
+  cam03_winter:
+    horizontal_ratio_threshold: 1.0
+    horizontal_angle_threshold: 50
+    horizontal_persistence_seconds: 0.4
+    min_forward_drop_ratio: 0.01
+  cam03_summer:
+    min_confirmation_angle_change_degrees: 8
+    min_episode_peak_angle_degrees: 50

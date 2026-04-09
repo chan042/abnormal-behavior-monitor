@@ -1,0 +1,6 @@
+event_type: wandering_suspected
+min_dwell_seconds: 600
+min_round_trips: 4
+min_direction_changes: 6
+min_path_to_displacement_ratio: 3.0
+cooldown_seconds: 120

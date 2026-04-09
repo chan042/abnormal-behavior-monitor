@@ -1,0 +1,8 @@
+camera_id: cam_fall_real_01
+name: fall_real_01
+source_type: file
+source: data/samples/fall_real_01.mp4
+enabled: true
+target_fps: 5
+frame_width: 1280
+frame_height: 720
