@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "CCTV 이상행동 관제 대시보드",
-  description: "노인시설·병원 특화 이상행동 실시간 관제 대시보드",
+  title: "Sentinel AI | Intelligent Behavior Monitoring",
+  description: "Advanced AI-powered real-time abnormal behavior monitoring and security dashboard",
 };
 
 export default function RootLayout({

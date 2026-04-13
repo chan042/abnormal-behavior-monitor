@@ -12,27 +12,27 @@ import {
  resolveApiUrl,
 } from "@/lib/api";
 import type {
- AnalyticsResponse,
- BrowserLiveResult,
- CameraSummary,
- DashboardEvent,
- DashboardView,
- EventStatus,
- EventType,
+  AnalyticsResponse,
+  BrowserLiveResult,
+  CameraSummary,
+  DashboardEvent,
+  DashboardView,
+  EventStatus,
+  EventType,
  SummaryResponse,
 } from "@/types/dashboard";
 
 import { BrowserLivePanel } from "./browser-live-panel";
 
 const EmptyInboxIcon = () => (
- <svg className="h-16 w-16 text-neutral-700" fill="none" viewBox="0 0 24 24" stroke="currentColor">
- <path
- strokeLinecap="round"
- strokeLinejoin="round"
- strokeWidth={1}
- d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4"
- />
- </svg>
+  <svg className="h-16 w-16 text-neutral-700" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+    <path
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth={1}
+      d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4"
+    />
+  </svg>
 );
 
 const EVENT_LABELS: Record<EventType, string> = {
@@ -55,7 +55,6 @@ const VIEW_ITEMS: Array<{ id: DashboardView; label: string }> = [
 ];
 
 const PREFERENCE_KEYS = {
- videoMode: "dashboard.videoMode",
  autoplayPreview: "dashboard.autoplayPreview",
  autoRefreshSeconds: "dashboard.autoRefreshSeconds",
  autoNext: "dashboard.autoNext",
@@ -119,6 +118,26 @@ function formatSourceTimestamp(value?: number | null) {
  return `${minutes}:${seconds}.${millis}`;
 }
 
+function withAssetVersion(url?: string | null, version?: string | null) {
+ if (!url) return undefined;
+ if (!version) return url;
+ const separator = url.includes("?") ? "&" : "?";
+ return `${url}${separator}v=${encodeURIComponent(version)}`;
+}
+
+function primaryVideoUrl(event?: DashboardEvent | null) {
+ if (!event) return undefined;
+ return withAssetVersion(
+  event.overlay_clip_url || event.clip_url || undefined,
+  event.updated_at,
+ );
+}
+
+function noteSeedText(event?: DashboardEvent | null) {
+ if (!event) return "";
+ return event.operator_note || event.description || "";
+}
+
 function priorityLabel(priority?: string) {
  if (priority === "critical") return "즉시 검토";
  if (priority === "warning") return "검토 필요";
@@ -146,6 +165,27 @@ function eventTone(eventType?: EventType | string | null) {
  return "border-[#d29922]/30 bg-[#d29922]/10 text-[#d29922]";
  }
  return "border-[#8b949e]/30 bg-[#8b949e]/10 text-[#8b949e]";
+}
+
+// Premium Tones for Event Review Page Only
+function eventStatusTonePremium(status?: EventStatus | string) {
+  if (status === "confirmed") return "border-blue-500/30 bg-blue-500/10 text-blue-400";
+  if (status === "false_positive") return "border-neutral-500/30 bg-neutral-500/10 text-neutral-400";
+  if (status === "dismissed") return "border-slate-600/30 bg-slate-600/10 text-slate-500";
+  return "border-white/5 bg-transparent text-neutral-500";
+}
+
+function eventTypeTonePremium(eventType?: EventType | string | null) {
+  if (eventType === "fall_suspected") return "border-rose-500/30 bg-rose-500/10 text-rose-400";
+  if (eventType === "wandering_suspected") return "border-amber-500/30 bg-amber-500/10 text-amber-400";
+  return "border-indigo-500/30 bg-indigo-500/10 text-indigo-400";
+}
+
+function eventPriorityTonePremium(priority?: string) {
+  if (priority === "critical") return "border-rose-500/30 bg-rose-500/10 text-rose-400";
+  if (priority === "warning") return "border-amber-500/30 bg-amber-500/10 text-amber-400";
+  if (priority === "muted") return "border-slate-500/30 bg-slate-500/10 text-slate-400";
+  return "border-emerald-500/30 bg-emerald-500/10 text-emerald-400";
 }
 
 function connectionLabel(mode: ConnectionMode) {
@@ -195,6 +235,11 @@ function writePreference(key: string, value: string) {
  window.localStorage.setItem(key, value);
 }
 
+function removePreference(key: string) {
+ if (typeof window === "undefined") return;
+ window.localStorage.removeItem(key);
+}
+
 function PanelTitle({ title, right }: { title: string; right?: React.ReactNode }) {
  return (
  <div className="mb-2 flex items-center justify-between gap-3 border-b border-neutral-700 pb-2">
@@ -202,6 +247,15 @@ function PanelTitle({ title, right }: { title: string; right?: React.ReactNode }
  {right && <div>{right}</div>}
  </div>
  );
+}
+
+function EventPanelTitle({ title, right }: { title: string; right?: React.ReactNode }) {
+  return (
+    <div className="flex items-center justify-between gap-3 border-b border-white/[0.05] pb-3 mb-4">
+      <h2 className="text-[10px] font-black uppercase tracking-[0.2em] text-neutral-500">{title}</h2>
+      {right && <div>{right}</div>}
+    </div>
+  );
 }
 
 function MetricCard({
@@ -220,14 +274,14 @@ function MetricCard({
  <div className="text-[11px] font-medium uppercase tracking-wider text-neutral-500 truncate">{label}</div>
  <div className="flex items-center gap-2">
  {icon ? (
- <div className={classNames("flex shrink-0 items-center justify-center text-lg", highlight ? "text-[#ff7b72]" : "text-[#8b949e]")}>
+ <div className={classNames("flex shrink-0 items-center justify-center text-lg", highlight ? "text-blue-500" : "text-[#8b949e]")}>
  {icon}
  </div>
  ) : null}
  <div
  className={classNames(
  "text-2xl font-bold tracking-tight truncate",
- highlight ? "text-[#ff7b72] " : "text-neutral-100 ",
+ highlight ? "text-blue-500" : "text-neutral-100 ",
  )}
  >
  {value}
@@ -237,59 +291,78 @@ function MetricCard({
  );
 }
 
+function EventMetricCard({
+  label,
+  value,
+  highlight,
+}: {
+  label: string;
+  value: string | number;
+  highlight?: boolean;
+}) {
+  return (
+    <div className="group flex flex-col gap-1.5 rounded-2xl border border-white/5 bg-white/[0.02] p-5 transition-all duration-300 hover:bg-white/[0.04] hover:border-white/10">
+      <span className="text-[10px] font-bold uppercase tracking-widest text-neutral-500">{label}</span>
+      <span className={classNames(
+        "text-lg font-black tracking-tight transition-colors",
+        highlight ? "text-blue-500" : "text-neutral-100 group-hover:text-white"
+      )}>
+        {value}
+      </span>
+    </div>
+  );
+}
+
 function TinyTrendBars({ values, labels }: { values: number[]; labels: string[] }) {
- const maxValue = Math.max(...values, 1) * 1.1; // 10% headroom
- 
- return (
- <div className="relative flex h-full w-full flex-col pt-6">
- {/* Background grid lines */}
- <div className="absolute inset-x-0 bottom-6 top-6 flex flex-col justify-between pointer-events-none">
- <div className="w-full border-b border-white/5" />
- <div className="w-full border-b border-white/5" />
- <div className="w-full border-b border-white/5" />
- </div>
- 
- {/* Y-axis max/min label */}
- <div className="absolute left-0 top-1 text-[9px] font-medium text-neutral-600 pointer-events-none">
- {Math.floor(maxValue)}
- </div>
- <div className="absolute left-0 bottom-5 text-[9px] font-medium text-neutral-600 pointer-events-none">
- 0
- </div>
- 
- <div className="z-10 flex h-full w-full items-end justify-between gap-1.5 pb-1 pl-4">
- {values.map((value, index) => {
- const heightPct = Math.max((value / maxValue) * 100, 2);
- return (
- <div key={`${labels[index]}-${index}`} className="group relative flex h-full flex-1 flex-col justify-end items-center cursor-default">
- {/* Tooltip */}
- <div className="absolute bottom-full mb-1 opacity-0 transition-all duration-200 group-hover:opacity-100 group-hover:-translate-y-1 pointer-events-none z-20 flex flex-col items-center">
- <span className="rounded bg-neutral-100 px-2 py-0.5 text-[11px] font-bold text-black shadow-lg">
- {value}
- </span>
- <div className="h-1.5 w-1.5 rotate-45 bg-neutral-100 -mt-1" />
- </div>
- 
- {/* Bar */}
- <div className="flex h-full w-full items-end justify-center pb-5 relative">
- <div
- className="w-full max-w-[32px] rounded-t-[3px] transition-all duration-300 ease-out bg-neutral-800 group-hover:bg-[#ff7b72] relative overflow-hidden"
- style={{ height: `${heightPct}%` }}
- >
- <div className="absolute inset-x-0 bottom-0 top-1/2 bg-gradient-to-t from-transparent to-white/20 hidden group-hover:block" />
- </div>
- </div>
- 
- {/* Label */}
- <span className="absolute bottom-0 text-[10px] font-medium text-neutral-500 transition-colors group-hover:text-neutral-300 w-full text-center truncate">
- {labels[index]}
- </span>
- </div>
- );
- })}
- </div>
- </div>
- );
+  const maxValue = Math.max(...values, 1);
+  const chartMax = maxValue * 1.1; 
+  
+  return (
+    <div className="relative flex h-full w-full flex-col pt-6">
+      {/* Background grid lines */}
+      <div className="absolute inset-x-0 bottom-6 top-6 flex flex-col justify-between pointer-events-none">
+        <div className="w-full border-b border-white/[0.03]" />
+        <div className="w-full border-b border-white/[0.03]" />
+        <div className="w-full border-b border-white/[0.03]" />
+      </div>
+      
+      {/* Y-axis labels */}
+      <div className="absolute left-0 top-1 text-[9px] font-bold text-neutral-600 pointer-events-none uppercase tracking-tighter">
+        {Math.floor(chartMax)}
+      </div>
+      
+      <div className="z-10 flex h-full w-full items-end justify-between gap-1.5 pb-1 pl-4">
+        {values.map((value, index) => {
+          const heightPct = Math.max((value / chartMax) * 100, 3);
+          
+          return (
+            <div key={`${labels[index]}-${index}`} className="group relative flex h-full flex-1 flex-col justify-end items-center cursor-default">
+              {/* Clean Tooltip */}
+              <div className="absolute bottom-full mb-1.5 opacity-0 transition-opacity duration-200 group-hover:opacity-100 pointer-events-none z-30 flex flex-col items-center">
+                <div className="rounded bg-neutral-100 px-2 py-1 shadow-lg">
+                  <span className="text-[10px] font-bold text-black">{value}</span>
+                </div>
+                <div className="h-1 w-1 rotate-45 bg-neutral-100 -mt-[2px]" />
+              </div>
+              
+              {/* Bar */}
+              <div className="flex h-full w-full items-end justify-center pb-5 relative">
+                <div
+                  className="w-full max-w-[32px] rounded-t-[2px] transition-colors duration-200 bg-neutral-700 group-hover:bg-blue-600 shadow-sm"
+                  style={{ height: `${heightPct}%` }}
+                />
+              </div>
+              
+              {/* Label */}
+              <span className="absolute bottom-0 text-[10px] font-medium text-neutral-500 transition-colors group-hover:text-neutral-300 w-full text-center truncate">
+                {labels[index]}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
 }
 
 function ProgressMetric({
@@ -325,7 +398,7 @@ function BarList({
  const maxValue = Math.max(...rows.map((row) => row.value), 1);
  if (!rows.length) {
  return (
- <div className="flex h-full items-center justify-center border border-neutral-800 border-neutral-800 bg-neutral-800 p-4 text-sm text-neutral-500">
+ <div className="flex h-full items-center justify-center border border-neutral-800 bg-neutral-800 p-4 text-sm text-neutral-500">
  데이터 없음
  </div>
  );
@@ -380,7 +453,6 @@ export function DashboardApp() {
 
  const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
  const [selectedCameraId, setSelectedCameraId] = useState<string | null>(null);
- const [videoMode, setVideoMode] = useState<"overlay" | "clip">("overlay");
  const [autoplayPreview, setAutoplayPreview] = useState(false);
  const [autoNext, setAutoNext] = useState(true);
  const [autoRefreshSeconds, setAutoRefreshSeconds] = useState(20);
@@ -394,11 +466,11 @@ export function DashboardApp() {
  const [connectionMode, setConnectionMode] = useState<ConnectionMode>("connecting");
  const [lastUpdatedAt, setLastUpdatedAt] = useState<Date | null>(null);
  const [noteDrafts, setNoteDrafts] = useState<Record<string, string>>({});
+ const noteBaselineRef = useRef<Record<string, string>>({});
  const initialLoadRef = useRef(true);
  const noteFieldRef = useRef<HTMLTextAreaElement | null>(null);
 
  const [showStatusLog, setShowStatusLog] = useState(false);
- const [selectedEventIds, setSelectedEventIds] = useState<Set<string>>(new Set());
  const [toasts, setToasts] = useState<Array<{ id: string; message: string }>>([]);
 
  const addToast = useCallback((message: string) => {
@@ -410,7 +482,7 @@ export function DashboardApp() {
  }, []);
 
  useEffect(() => {
- setVideoMode(readPreference(PREFERENCE_KEYS.videoMode, "overlay") as "overlay" | "clip");
+ removePreference("dashboard.videoMode");
  setAutoplayPreview(readPreference(PREFERENCE_KEYS.autoplayPreview, "true") === "true");
  setAutoNext(readPreference(PREFERENCE_KEYS.autoNext, "true") === "true");
  setAutoRefreshSeconds(
@@ -418,7 +490,6 @@ export function DashboardApp() {
  );
  }, []);
 
- useEffect(() => writePreference(PREFERENCE_KEYS.videoMode, videoMode), [videoMode]);
  useEffect(
  () => writePreference(PREFERENCE_KEYS.autoplayPreview, String(autoplayPreview)),
  [autoplayPreview],
@@ -463,23 +534,21 @@ export function DashboardApp() {
  return nextCameras.items[0]?.camera_id ?? nextEvents.items[0]?.camera_id ?? null;
  });
 
- setSelectedEventIds((current) => {
- const nextIds = new Set<string>();
- const validIds = new Set(nextEvents.items.map((event) => event.event_id));
- current.forEach((id) => {
- if (validIds.has(id)) {
- nextIds.add(id);
- }
- });
- return nextIds;
- });
-
+ const previousBaselines = noteBaselineRef.current;
+ const nextBaselines = Object.fromEntries(
+ nextEvents.items.map((event) => [event.event_id, noteSeedText(event)]),
+ );
+ noteBaselineRef.current = nextBaselines;
  setNoteDrafts((current) => {
- const nextDrafts = { ...current };
+ const nextDrafts: Record<string, string> = {};
  nextEvents.items.forEach((event) => {
- if (!(event.event_id in nextDrafts)) {
- nextDrafts[event.event_id] = event.operator_note || "";
- }
+ const baseline = nextBaselines[event.event_id] ?? "";
+ const currentValue = current[event.event_id];
+ const previousBaseline = previousBaselines[event.event_id];
+ nextDrafts[event.event_id] =
+ currentValue === undefined || currentValue === previousBaseline
+ ? baseline
+ : currentValue;
  });
  return nextDrafts;
  });
@@ -601,12 +670,29 @@ export function DashboardApp() {
  await loadData();
  }, [loadData]);
 
+ const resolveNoteDraft = useCallback(
+ (eventId: string) => {
+ const event = events.find((item) => item.event_id === eventId) ?? null;
+ return noteDrafts[eventId] ?? noteSeedText(event);
+ },
+ [events, noteDrafts],
+ );
+
+ const markNoteDraftCommitted = useCallback((eventId: string, value: string) => {
+ noteBaselineRef.current = {
+ ...noteBaselineRef.current,
+ [eventId]: value,
+ };
+ }, []);
+
  const reviewEvent = useCallback(
  async (eventId: string, status: EventStatus) => {
+ const nextOperatorNote = resolveNoteDraft(eventId);
  await postEventReview(eventId, {
  status,
- operator_note: noteDrafts[eventId] ?? "",
+ operator_note: nextOperatorNote,
  });
+ markNoteDraftCommitted(eventId, nextOperatorNote);
  addToast(`이벤트 1건 ${STATUS_LABELS[status]} 처리됨`);
 
  if (autoNext && status !== "new") {
@@ -622,49 +708,21 @@ export function DashboardApp() {
 
  await loadData();
  },
- [addToast, autoNext, filteredEvents, loadData, noteDrafts],
+ [addToast, autoNext, filteredEvents, loadData, markNoteDraftCommitted, resolveNoteDraft],
  );
 
  const saveNote = useCallback(
  async (eventId: string) => {
+ const nextOperatorNote = resolveNoteDraft(eventId);
  await postEventReview(eventId, {
- operator_note: noteDrafts[eventId] ?? "",
+ operator_note: nextOperatorNote,
  });
+ markNoteDraftCommitted(eventId, nextOperatorNote);
  addToast("운영자 메모를 저장했습니다.");
  await loadData();
  },
- [addToast, loadData, noteDrafts],
+ [addToast, loadData, markNoteDraftCommitted, resolveNoteDraft],
  );
-
- const bulkUpdateStatus = useCallback(
- async (status: EventStatus) => {
- if (selectedEventIds.size === 0) return;
- await Promise.all(
- Array.from(selectedEventIds).map((eventId) =>
- postEventReview(eventId, {
- status,
- operator_note: noteDrafts[eventId] ?? "",
- }),
- ),
- );
- addToast(`${selectedEventIds.size}개 항목을 ${STATUS_LABELS[status]} 처리했습니다.`);
- setSelectedEventIds(new Set());
- await loadData();
- },
- [addToast, loadData, noteDrafts, selectedEventIds],
- );
-
- const toggleEventSelection = useCallback((id: string) => {
- setSelectedEventIds((current) => {
- const next = new Set(current);
- if (next.has(id)) {
- next.delete(id);
- } else {
- next.add(id);
- }
- return next;
- });
- }, []);
 
  const handleInference = useCallback(
  (result: BrowserLiveResult) => {
@@ -708,16 +766,6 @@ export function DashboardApp() {
  }
  }
 
- if (event.key === "1") {
- event.preventDefault();
- setVideoMode("clip");
- }
-
- if (event.key === "2") {
- event.preventDefault();
- setVideoMode("overlay");
- }
-
  if (event.key === "m" || event.key === "M") {
  event.preventDefault();
  noteFieldRef.current?.focus();
@@ -733,14 +781,7 @@ export function DashboardApp() {
  event.preventDefault();
  void reviewEvent(selectedEvent.event_id, "false_positive");
  }
- if (event.key === "d" || event.key === "D") {
- event.preventDefault();
- void reviewEvent(selectedEvent.event_id, "dismissed");
- }
- if (event.key === "n" || event.key === "N") {
- event.preventDefault();
- void reviewEvent(selectedEvent.event_id, "new");
- }
+
  }
 
  window.addEventListener("keydown", handleKeyDown);
@@ -762,10 +803,22 @@ export function DashboardApp() {
  ? (summary.events.new / summary.events.total) * 100
  : 0;
 
+ const accuracyEvents = useMemo(() => {
+  return events
+  .filter((e) => e.status === "confirmed" || e.status === "false_positive")
+  .slice(0, 10);
+ }, [events]);
+
+ const recentAccuracy = useMemo(() => {
+  if (accuracyEvents.length === 0) return 0;
+  const confirmedCount = accuracyEvents.filter((e) => e.status === "confirmed").length;
+  return (confirmedCount / accuracyEvents.length) * 100;
+ }, [accuracyEvents]);
+
  const incidentRows = filteredEvents.slice(0, 10);
  const statusLogRows = filteredEvents.slice(0, 8);
- const noteValue = selectedEvent ? noteDrafts[selectedEvent.event_id] ?? "" : "";
- const savedNoteValue = selectedEvent?.operator_note ?? "";
+ const noteValue = selectedEvent ? noteDrafts[selectedEvent.event_id] ?? noteSeedText(selectedEvent) : "";
+ const savedNoteValue = selectedEvent ? noteSeedText(selectedEvent) : "";
  const isNoteDirty = selectedEvent ? noteValue !== savedNoteValue : false;
  const hasActiveFilters =
  eventTypeFilter !== "all" ||
@@ -841,26 +894,27 @@ export function DashboardApp() {
  }, [hasActiveFilters, isNoteDirty, resetFilters, saveNote, selectedEvent, view]);
 
  return (
- <div className="flex h-screen w-screen flex-col overflow-hidden bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-neutral-800 via-neutral-900 to-neutral-950 font-sans text-neutral-300">
-  <header className="flex min-h-12 shrink-0 flex-wrap items-center justify-start gap-3 border-b border-neutral-800 bg-neutral-800 pl-2 pr-4 py-1">
-    <nav className="flex gap-1">
-      {VIEW_ITEMS.map((item) => (
-        <button
-          key={item.id}
-          type="button"
-          onClick={() => setView(item.id)}
-          className={classNames(
-            "rounded-md px-3 py-1.5 text-sm font-medium transition",
-            view === item.id
-              ? "bg-neutral-800 text-white"
-              : "text-neutral-400 hover:bg-neutral-800/50 hover:text-neutral-200",
-          )}
-        >
-          {item.label}
-        </button>
-      ))}
-    </nav>
-  </header>
+    <div className="flex h-screen w-screen flex-col overflow-hidden bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-neutral-800 via-neutral-900 to-neutral-950 font-sans text-neutral-300">
+      <header className="flex h-16 shrink-0 items-center justify-between border-b border-neutral-800 bg-neutral-900 px-6">
+        <h1 className="text-xl font-bold tracking-tight text-white">Sentinel AI</h1>
+        <nav className="flex gap-2">
+          {VIEW_ITEMS.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => setView(item.id)}
+              className={classNames(
+                "rounded-md px-3 py-1.5 text-sm font-medium transition",
+                view === item.id
+                  ? "bg-neutral-800 text-white"
+                  : "text-neutral-400 hover:bg-neutral-800/50 hover:text-neutral-200",
+              )}
+            >
+              {item.label}
+            </button>
+          ))}
+        </nav>
+      </header>
 
  {error && (
  <div className="border-b border-red-500/20 bg-red-500/10 px-4 py-2 text-sm text-red-300">
@@ -886,10 +940,18 @@ export function DashboardApp() {
  <aside
  className="flex-[2_2_0%] min-w-0 flex shrink-0 flex-col gap-6 overflow-y-auto border-r border-neutral-700 bg-neutral-900 p-5"
  >
- <div className="flex flex-col gap-2">
- <PanelTitle title="미확인 이벤트" />
- <div className="mt-2 text-2xl font-bold tracking-tight text-[#ff7b72]">{summary.events.new}개</div>
- </div>
+  <div className="grid grid-cols-2 gap-4">
+   <div className="flex flex-col gap-2">
+   <PanelTitle title="미확인 이벤트" />
+   <div className="mt-2 text-2xl font-bold tracking-tight text-blue-500">{summary.events.new}개</div>
+   </div>
+
+   <div className="flex flex-col gap-2">
+   <PanelTitle title="최근 정확도" />
+   <div className="mt-2 text-2xl font-bold tracking-tight text-white">{Math.round(recentAccuracy)}%</div>
+   </div>
+
+  </div>
 
  <div className="flex flex-col gap-2">
  <PanelTitle title="이벤트 추세" />
@@ -927,22 +989,17 @@ export function DashboardApp() {
  </section>
 
  <aside
- className="flex-[2_2_0%] min-w-0 flex shrink-0 flex-col gap-6 overflow-y-auto border-l border-neutral-700 bg-neutral-900 p-5"
+  className="flex-[2_2_0%] min-w-0 flex shrink-0 flex-col gap-6 border-l border-neutral-700 bg-neutral-900 p-5 overflow-hidden"
  >
-        <div className="flex flex-col">
+        <div className="flex flex-col shrink-0">
           <PanelTitle title="이벤트 미리보기" />
-          {selectedEvent ? (
-            <div className="flex flex-col gap-4 mt-2">
-              <div className="relative border border-white/5 bg-neutral-900 w-full overflow-hidden rounded bg-neutral-800 aspect-video">
-                {((videoMode === "overlay" && selectedEvent.overlay_clip_url) ||
-                  selectedEvent.clip_url) ? (
+	          {selectedEvent ? (
+	            <div className="flex flex-col gap-4 mt-2">
+	              <div className="relative border border-white/5 bg-neutral-900 w-full overflow-hidden rounded bg-neutral-800 aspect-video">
+                {primaryVideoUrl(selectedEvent) ? (
                   <video
-                    key={`${selectedEvent.event_id}-${videoMode}`}
-                    src={
-                      (videoMode === "overlay" && selectedEvent.overlay_clip_url) ||
-                      selectedEvent.clip_url ||
-                      undefined
-                    }
+                    key={`${selectedEvent.event_id}-${primaryVideoUrl(selectedEvent)}`}
+                    src={primaryVideoUrl(selectedEvent)}
                     controls
                     loop
                     autoPlay={autoplayPreview}
@@ -961,35 +1018,20 @@ export function DashboardApp() {
                     />
                   </div>
                 ) : (
-                  <div className="flex aspect-video items-center justify-center text-xs text-neutral-500">
-                    미리보기가 없습니다
-                  </div>
-                )}
-              </div>
-
-              <div className="flex flex-col p-3 rounded bg-neutral-800 border border-neutral-800 w-full mb-2">
-                <div className="flex justify-between items-center mb-1">
-                  <h4 className="text-xs font-semibold text-neutral-300">상황 설명</h4>
-                  <button
-                    onClick={() => setView("events")}
-                    className="text-[10px] text-neutral-400 hover:text-white px-2 py-0.5 bg-neutral-800 rounded transition"
-                  >
-                    자세히 보기 →
-                  </button>
-                </div>
-                <p className="text-xs text-neutral-400 leading-relaxed min-h-[36px]">
-                  {selectedEvent.description || "등록된 설명이 없습니다."}
-                </p>
-              </div>
-            </div>
-          ) : (
+	                  <div className="flex aspect-video items-center justify-center text-xs text-neutral-500">
+	                    미리보기가 없습니다
+	                  </div>
+	                )}
+	              </div>
+	            </div>
+	          ) : (
             <div className="mt-2 text-xs text-neutral-600">이벤트를 선택하세요.</div>
           )}
         </div>
 
-        <div className="flex flex-col">
+        <div className="flex flex-col flex-1 min-h-0">
           <PanelTitle title="최근 이벤트" />
-          <div className="flex flex-col gap-1 mt-2">
+          <div className="flex flex-col gap-1 mt-2 overflow-y-auto pr-1">
             {incidentRows.length ? (
               incidentRows.map((event) => {
                 const isSelected = selectedEvent?.event_id === event.event_id;
@@ -1043,534 +1085,276 @@ export function DashboardApp() {
  </>
  )}
 
- {view === "events" && (
- <>
- <aside
- className="flex-[3_3_0%] min-w-0 flex min-h-0 shrink-0 flex-col overflow-hidden border-r border-neutral-800 bg-neutral-800"
- >
- <div className="border-b border-neutral-800 p-4">
- <PanelTitle
- title="이벤트 큐"
- right={
- selectedEventIds.size > 0 && (
- <div className="flex gap-2">
- <button
- onClick={() => void bulkUpdateStatus("confirmed")}
- className="rounded bg-emerald-600/20 px-2 py-1 text-xs text-emerald-300 transition hover:bg-emerald-600/40"
- >
- 일괄 정탐
- </button>
- <button
- onClick={() => void bulkUpdateStatus("false_positive")}
- className="rounded bg-red-600/20 px-2 py-1 text-xs text-red-300 transition hover:bg-red-600/40"
- >
- 일괄 오탐
- </button>
- </div>
- )
- }
- />
- <div className="flex flex-col gap-2">
- <select
- value={eventTypeFilter}
- onChange={(event) =>
- setEventTypeFilter(event.target.value as "all" | EventType)
- }
- className="w-full rounded-md border border-neutral-800 bg-neutral-900 px-3 py-1.5 text-sm text-neutral-200 outline-none focus:border-neutral-600"
- >
- <option value="all">전체 유형</option>
- <option value="fall_suspected">실신 의심</option>
- <option value="wandering_suspected">배회 의심</option>
- </select>
- <div className="flex gap-2">
- <select
- value={statusFilter}
- onChange={(event) =>
- setStatusFilter(event.target.value as "all" | EventStatus)
- }
- className="flex-1 rounded-md border border-neutral-800 bg-neutral-900 px-3 py-1.5 text-sm text-neutral-200 outline-none focus:border-neutral-600"
- >
- <option value="all">전체 상태</option>
- <option value="new">미확인</option>
- <option value="confirmed">정탐</option>
- <option value="false_positive">오탐</option>
- <option value="dismissed">종료</option>
- </select>
- <select
- value={cameraFilter}
- onChange={(event) => setCameraFilter(event.target.value)}
- className="flex-1 rounded-md border border-neutral-800 bg-neutral-900 px-3 py-1.5 text-sm text-neutral-200 outline-none focus:border-neutral-600"
- >
- <option value="all">전체 카메라</option>
- {eventCameraOptions.map((camera) => (
- <option key={camera.cameraId} value={camera.cameraId}>
- {camera.cameraName}
- </option>
- ))}
- </select>
- </div>
- <div className="text-xs font-mono text-neutral-100">
- 검색 결과 {filteredEvents.length}건
- </div>
- <div className="flex flex-wrap gap-2 text-xs">
- <span className="rounded border border-neutral-800 bg-neutral-900 px-2 py-1 text-neutral-400">
- 미확인 {filteredNewCount}
- </span>
- <span className="rounded border border-neutral-800 bg-neutral-900 px-2 py-1 text-neutral-400">
- 선택 {selectedEventIds.size}
- </span>
- {hasActiveFilters ? (
- <button
- type="button"
- onClick={resetFilters}
- className="rounded border border-neutral-700 px-2 py-1 text-neutral-400 transition hover:bg-neutral-800 hover:text-neutral-200"
- >
- 필터 초기화
- </button>
- ) : null}
- </div>
- </div>
- </div>
+  {view === "events" && (
+  <div className="flex flex-1 overflow-hidden bg-[#050505]">
+      <aside className="flex-[2_2_0%] min-w-0 flex shrink-0 flex-col border-r border-neutral-700 bg-neutral-900">
+        <div className="flex shrink-0 flex-col gap-4 p-5">
+          <EventPanelTitle title="이벤트 관리" />
 
- <div className="flex-1 overflow-y-auto p-4">
- {filteredEvents.length === 0 ? (
- <EmptyState message="조회된 이벤트가 없습니다." />
- ) : (
- <div className="flex flex-col gap-2">
- {filteredEvents.map((event) => {
- const isSelectedEvent = selectedEvent?.event_id === event.event_id;
- const isMultiSelected = selectedEventIds.has(event.event_id);
- const isUnread = event.status === "new";
+          <div className="flex flex-col gap-3">
+            <div className="flex flex-col gap-1.5">
+              <label className="text-[10px] font-bold text-neutral-500 uppercase tracking-widest">Type</label>
+              <select
+                value={eventTypeFilter}
+                onChange={(event) => setEventTypeFilter(event.target.value as EventType | "all")}
+                className="w-full rounded-lg border border-white/5 bg-white/[0.03] px-3 py-2 text-xs text-neutral-300 outline-none focus:border-blue-500/50"
+              >
+                <option value="all">ALL TYPES</option>
+                {Object.entries(EVENT_LABELS).map(([id, label]) => (
+                  <option key={id} value={id}>{label.toUpperCase()}</option>
+                ))}
+              </select>
+            </div>
 
- return (
- <div
- key={event.event_id}
- onClick={() => {
- setSelectedEventId(event.event_id);
- setSelectedCameraId(event.camera_id);
- }}
- className={classNames(
- "flex cursor-pointer select-none items-start gap-3 rounded-sm border-l-2 p-3 text-left transition",
- isSelectedEvent
- ? "border-neutral-600 bg-neutral-800"
- : "border-neutral-800 hover:border-neutral-700",
- isUnread ? "bg-neutral-800 hover:bg-neutral-800" : "bg-transparent hover:bg-neutral-800 opacity-70",
- )}
- >
- <div
- className={classNames(
- "mt-0.5 w-1 self-stretch rounded-full",
- priorityStripe(event.priority),
- )}
- />
- <div className="pt-0.5">
- <input
- type="checkbox"
- checked={isMultiSelected}
- onChange={() => toggleEventSelection(event.event_id)}
- onClick={(clickEvent) => clickEvent.stopPropagation()}
- className="h-4 w-4 rounded border-neutral-700 bg-neutral-800 text-neutral-400 focus:ring-white focus:ring-offset-neutral-900"
- />
- </div>
- <div className="flex-1">
- <div className="flex items-center justify-between gap-3">
- <span className="text-sm font-medium text-neutral-100">
- {EVENT_LABELS[event.event_type]}
- </span>
- <span
- className={classNames(
- "rounded border px-2 py-1 text-[10px] font-bold",
- statusTone(event.status),
- )}
- >
- {STATUS_LABELS[event.status]}
- </span>
- </div>
- <div className="mt-1 text-xs text-neutral-400">
- {event.camera_name} · {formatCompactDateTime(event.started_at)}
- </div>
- <div className="mt-2 flex flex-wrap gap-2">
- <span
- className={classNames(
- "rounded border px-2 py-1 text-[10px] font-medium",
- priorityTone(event.priority),
- )}
- >
- {priorityLabel(event.priority)}
- </span>
- <span className="rounded border border-neutral-800 bg-neutral-900 px-2 py-1 text-[10px] text-neutral-400">
- Track {event.track_id}
- </span>
- <span className="rounded border border-neutral-800 bg-neutral-900 px-2 py-1 text-[10px] text-neutral-400">
- {formatConfidence(event.confidence)}
- </span>
- </div>
- </div>
- </div>
- );
- })}
- </div>
- )}
- </div>
- </aside>
+            <div className="flex flex-col gap-1.5">
+              <label className="text-[10px] font-bold text-neutral-500 uppercase tracking-widest">Status</label>
+              <select
+                value={statusFilter}
+                onChange={(event) => setStatusFilter(event.target.value as EventStatus | "all")}
+                className="w-full rounded-lg border border-white/5 bg-white/[0.03] px-3 py-2 text-xs text-neutral-300 outline-none focus:border-blue-500/50"
+              >
+                <option value="all">ALL STATUS</option>
+                {Object.entries(STATUS_LABELS).map(([id, label]) => (
+                  <option key={id} value={id}>{label.toUpperCase()}</option>
+                ))}
+              </select>
+            </div>
+            
+            <div className="mt-1 flex items-center justify-between">
+              <div className="text-[10px] font-mono text-neutral-500 flex gap-3">
+                <span>RESULTS <span className="text-neutral-300 font-bold">{filteredEvents.length}</span></span>
+              </div>
+            </div>
+          </div>
+        </div>
 
- <section className="flex-[4_4_0%] min-w-0 flex flex-col gap-4 overflow-y-auto p-4">
- <PanelTitle
- title="영상 재생"
- right={
- <div className="flex rounded-md border border-neutral-700 bg-neutral-800 p-0.5">
- <button
- onClick={() => setVideoMode("overlay")}
- className={classNames(
- "rounded px-3 py-1 text-xs font-medium",
- videoMode === "overlay"
- ? "bg-neutral-700 text-white"
- : "text-neutral-400 hover:text-white",
- )}
- >
- 오버레이
- </button>
- <button
- onClick={() => setVideoMode("clip")}
- className={classNames(
- "rounded px-3 py-1 text-xs font-medium",
- videoMode === "clip"
- ? "bg-neutral-700 text-white"
- : "text-neutral-400 hover:text-white",
- )}
- >
- 원본
- </button>
- </div>
- }
- />
+        <div className="flex-1 overflow-y-auto p-3 space-y-1">
+          {filteredEvents.length === 0 ? (
+            <EmptyState message="조회된 이벤트가 없습니다." />
+          ) : (
+            <div className="flex flex-col gap-1.5">
+              {filteredEvents.map((event) => {
+                const isSelectedEvent = selectedEvent?.event_id === event.event_id;
+                const isUnread = event.status === "new";
 
- {selectedEvent ? (
- <div className="flex flex-col gap-4">
- <div className="relative flex aspect-video w-full items-center justify-center overflow-hidden border-neutral-800 bg-neutral-800 bg-neutral-900">
- {((videoMode === "overlay" && selectedEvent.overlay_clip_url) ||
- selectedEvent.clip_url) ? (
- <video
- key={`${selectedEvent.event_id}-${videoMode}`}
- src={
- (videoMode === "overlay" && selectedEvent.overlay_clip_url) ||
- selectedEvent.clip_url ||
- undefined
-	 }
-	 controls
-	 loop
-	 autoPlay={autoplayPreview}
-	 muted={autoplayPreview}
-	 className="h-full w-full object-contain"
- />
- ) : selectedEvent.snapshot_url ? (
- <div className="relative h-full w-full">
- <Image
- src={selectedEvent.snapshot_url}
- alt="이벤트 스냅샷"
- fill
- unoptimized
- sizes="960px"
- className="object-contain"
- />
- </div>
- ) : (
- <EmptyState message="재생 가능한 미디어가 없습니다." />
- )}
- </div>
+                return (
+                  <div
+                    key={event.event_id}
+                    onClick={() => {
+                      setSelectedEventId(event.event_id);
+                      setSelectedCameraId(event.camera_id);
+                    }}
+                    className={classNames(
+                      "group relative flex cursor-pointer select-none items-center gap-4 rounded-xl px-4 py-3.5 border transition-all duration-300",
+                      isSelectedEvent
+                        ? "border-blue-500/40 bg-blue-500/[0.05] shadow-[0_0_20px_rgba(59,130,246,0.05)]"
+                        : "border-white/[0.03] bg-white/[0.01] hover:bg-white/[0.04] hover:border-white/[0.08]",
+                      !isUnread && !isSelectedEvent && "opacity-60 saturate-[0.8]"
+                    )}
+                  >
+                    {isSelectedEvent && (
+                      <div className="absolute left-0 top-1/2 -translate-y-1/2 h-8 w-1 rounded-r-full bg-blue-500 shadow-[0_0_10px_rgba(59,130,246,0.5)]" />
+                    )}
+                    
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between gap-3">
+                        <span className={classNames(
+                          "text-[13px] font-bold tracking-tight transition-colors",
+                          isSelectedEvent ? "text-white" : "text-neutral-300"
+                        )}>
+                          {EVENT_LABELS[event.event_type]}
+                        </span>
+                        <div className="flex items-center gap-1.5">
+                          {isUnread && (
+                            <span className="flex h-1.5 w-1.5 rounded-full bg-red-500 animate-pulse ring-4 ring-red-500/10" />
+                          )}
+                          <span className={classNames(
+                            "rounded-full px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider border",
+                            eventStatusTonePremium(event.status)
+                          )}>
+                            {STATUS_LABELS[event.status]}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="mt-1 flex items-center gap-2 text-[11px] text-neutral-500 font-medium">
+                        <span className="truncate">{event.camera_name}</span>
+                        <span className="text-white/10">|</span>
+                        <span className="shrink-0">{formatCompactDateTime(event.started_at)}</span>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </aside>
 
- <div className="grid grid-cols-2 gap-3 2xl:grid-cols-3">
- <MetricCard label="카메라" value={selectedEvent.camera_name} />
- <MetricCard
- label="장소"
- value={selectedEvent.camera_location || "-"}
- />
- <MetricCard
- label="발생 시간"
- value={formatCompactDateTime(selectedEvent.started_at)}
- />
- <MetricCard
- label="영상 시점"
- value={formatSourceTimestamp(selectedEvent.source_timestamp_ms)}
- />
- <MetricCard label="트랙 ID" value={String(selectedEvent.track_id)} />
- <MetricCard
- label="신뢰도"
- value={formatConfidence(selectedEvent.confidence)}
- />
- </div>
+      <section className="flex-[5_5_0%] min-w-0 flex flex-col gap-6 overflow-y-auto p-6 bg-black">
+        <EventPanelTitle title="분석 및 재생" />
 
- <div className="flex flex-wrap gap-2 text-xs">
- <span
- className={classNames(
- "rounded border px-2 py-1 font-medium",
- eventTone(selectedEvent.event_type),
- )}
- >
- {eventTypeLabel(selectedEvent.event_type)}
- </span>
- <span
- className={classNames(
- "rounded border px-2 py-1 font-medium",
- statusTone(selectedEvent.status),
- )}
- >
- {STATUS_LABELS[selectedEvent.status]}
- </span>
- <span
- className={classNames(
- "rounded border px-2 py-1 font-medium",
- priorityTone(selectedEvent.priority),
- )}
- >
- {priorityLabel(selectedEvent.priority)}
- </span>
- <span className="rounded border border-neutral-800 border-neutral-800 bg-neutral-800 px-2 py-1 text-neutral-400">
- J/K 이동
- </span>
- <span className="rounded border border-neutral-800 border-neutral-800 bg-neutral-800 px-2 py-1 text-neutral-400">
- 1/2 모드 전환
- </span>
- </div>
+        {selectedEvent ? (
+          <div className="flex flex-col gap-6 animate-in fade-in duration-500">
+            <div className="relative group aspect-video w-full overflow-hidden rounded-2xl border border-white/10 bg-[#0d0d0d] shadow-2xl">
+              <div className="absolute inset-x-0 top-0 h-24 bg-gradient-to-b from-black/60 to-transparent pointer-events-none z-10" />
 
- <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
- <div className="rounded-md bg-neutral-800 p-4">
- <PanelTitle title="이벤트 메타데이터" />
- <div className="grid grid-cols-2 gap-3 text-sm">
- <div className="rounded-md border border-neutral-800 bg-neutral-900 px-3 py-2">
- <div className="text-neutral-500">이벤트 ID</div>
- <div className="mt-1 break-all text-neutral-200">
- {selectedEvent.event_id}
- </div>
- </div>
- <div className="rounded-md border border-neutral-800 bg-neutral-900 px-3 py-2">
- <div className="text-neutral-500">ROI</div>
- <div className="mt-1 text-neutral-200">
- {selectedEvent.roi_id || "미지정"}
- </div>
- </div>
- <div className="rounded-md border border-neutral-800 bg-neutral-900 px-3 py-2">
- <div className="text-neutral-500">검토 시각</div>
- <div className="mt-1 text-neutral-200">
- {selectedEvent.reviewed_at
- ? formatDateTime(selectedEvent.reviewed_at)
- : "미검토"}
- </div>
- </div>
- <div className="rounded-md border border-neutral-800 bg-neutral-900 px-3 py-2">
- <div className="text-neutral-500">현재 상태</div>
- <div className="mt-1 text-neutral-200">
- {STATUS_LABELS[selectedEvent.status]}
- </div>
- </div>
- </div>
- </div>
+              
+              {(selectedEvent.overlay_clip_url || selectedEvent.clip_url) ? (
+                <video
+                  key={`${selectedEvent.event_id}-${primaryVideoUrl(selectedEvent)}`}
+                  src={primaryVideoUrl(selectedEvent)}
+                  controls
+                  loop
+                  autoPlay={autoplayPreview}
+                  muted={autoplayPreview}
+                  className="h-full w-full object-contain"
+                />
+              ) : selectedEvent.snapshot_url ? (
+                <div className="relative h-full w-full">
+                  <Image
+                    src={selectedEvent.snapshot_url}
+                    alt="이벤트 스냅샷"
+                    fill
+                    unoptimized
+                    sizes="960px"
+                    className="object-contain"
+                  />
+                </div>
+              ) : (
+                <EmptyState message="재생 가능한 미디어가 없습니다." />
+              )}
+            </div>
 
- <div className="rounded-md bg-neutral-800 p-4">
- <PanelTitle title="설명" />
- <p className="text-sm leading-6 text-neutral-400">
- {selectedEvent.description || "등록된 설명이 없습니다."}
- </p>
- </div>
- </div>
- </div>
- ) : (
- <EmptyState message="이벤트를 선택하세요." />
- )}
- </section>
-
- <aside
- className="flex-[3_3_0%] min-w-0 relative flex shrink-0 flex-col gap-4 overflow-y-auto border-l border-neutral-800 bg-neutral-800 p-4"
- >
- <PanelTitle title="운영자 판정" />
- {selectedEvent ? (
- <div className="flex min-h-0 flex-1 flex-col gap-4">
+            <div className="grid grid-cols-2 gap-4 2xl:grid-cols-3">
+              <EventMetricCard label="CAMERA" value={selectedEvent.camera_name} />
+              <EventMetricCard label="LOCATION" value={selectedEvent.camera_location || "SECURE ZONE"} />
+              <EventMetricCard label="TIMESTAMP" value={formatCompactDateTime(selectedEvent.started_at)} />
+              <EventMetricCard label="SOURCE POS" value={formatSourceTimestamp(selectedEvent.source_timestamp_ms)} />
+            </div>
 
 
+          </div>
+        ) : (
+          <EmptyState message="검토할 이벤트를 선택하십시오." />
+        )}
+      </section>
 
+      <aside className="flex-[3_3_0%] min-w-0 relative flex shrink-0 flex-col gap-6 overflow-y-auto border-l border-neutral-700 bg-neutral-900 p-5">
+        <EventPanelTitle title="관제 운영자 판정" />
+        {selectedEvent ? (
+          <div className="flex min-h-0 flex-1 flex-col gap-6">
+            <div className="group rounded-2xl border border-white/5 bg-white/[0.02] p-5 transition-all duration-300 hover:bg-white/[0.04] hover:border-white/10">
+              <div className="flex items-center justify-between gap-3 border-b border-white/[0.05] pb-3 mb-4">
+                <div className="text-[10px] font-black uppercase tracking-widest text-neutral-500">운영자 메모</div>
 
- <div className="rounded-md bg-neutral-800 p-4">
- <div className="flex items-center justify-between gap-3">
- <div className="text-sm font-medium text-neutral-200">운영자 메모</div>
- <div className="flex items-center gap-2 text-[11px]">
- <span
- className={classNames(
- "rounded border px-2 py-1 font-medium",
- isNoteDirty
- ? "border-amber-500/30 bg-amber-500/10 text-amber-300"
- : "border-emerald-500/30 bg-emerald-500/10 text-emerald-300",
- )}
- >
- {isNoteDirty ? "저장 필요" : "저장됨"}
- </span>
- <span className="text-neutral-500">Cmd/Ctrl+S</span>
- </div>
- </div>
- <textarea
- ref={noteFieldRef}
- id="operator-note"
- value={noteValue}
- onChange={(event) =>
- setNoteDrafts((current) => ({
- ...current,
- [selectedEvent.event_id]: event.target.value,
- }))
- }
- placeholder="판정 근거, 현장 조치, 후속 코멘트를 기록합니다."
- className="mt-3 min-h-40 w-full resize-y rounded-md border border-neutral-800 bg-neutral-900 px-3 py-3 text-sm text-neutral-200 outline-none placeholder:text-neutral-600 focus:border-neutral-600"
- />
- <button
- type="button"
- onClick={() => void saveNote(selectedEvent.event_id)}
- disabled={!isNoteDirty}
- className={classNames(
- "mt-3 w-full rounded-md py-2.5 text-sm font-medium transition",
- isNoteDirty
- ? "border border-neutral-700 bg-neutral-800 text-neutral-200 hover:bg-neutral-700"
- : "cursor-not-allowed border border-neutral-800 bg-neutral-800/40 text-neutral-500",
- )}
- >
- {isNoteDirty ? "메모 저장" : "저장됨"}
- </button>
- </div>
+              </div>
+              <textarea
+                ref={noteFieldRef}
+                id="operator-note-main"
+                value={noteValue}
+                onChange={(event) => setNoteDrafts((current) => ({ ...current, [selectedEvent.event_id]: event.target.value }))}
+                placeholder="조치 결과 및 특이사항을 기록하세요..."
+                className="w-full min-h-[160px] resize-none rounded-xl border border-white/5 bg-black/20 p-4 text-[13px] leading-relaxed text-neutral-200 outline-none placeholder:text-neutral-700 focus:border-blue-500/50 transition-all"
+              />
+              <button
+                type="button"
+                onClick={() => void saveNote(selectedEvent.event_id)}
+                disabled={!isNoteDirty}
+                className={classNames(
+                  "mt-4 w-full rounded-xl py-3 text-[11px] font-black uppercase tracking-widest transition-all",
+                  isNoteDirty ? "bg-white/10 text-white hover:bg-white/20" : "bg-white/[0.02] text-neutral-600 cursor-not-allowed opacity-50"
+                )}
+              >
+                메모 저장
+              </button>
+              <p className="mt-3 text-center text-[10px] text-neutral-600 font-medium">
+                AI로 생성된 상황 설명은 정확하지 않을 수 있습니다.
+              </p>
+            </div>
 
- <div className="sticky bottom-0 -mx-4 -mb-4 mt-auto grid grid-cols-1 gap-2 border-t border-neutral-800 border-neutral-800 bg-neutral-800 /90 p-4 backdrop-blur-sm">
- <div className="flex gap-2">
- <button
- onClick={() => void reviewEvent(selectedEvent.event_id, "confirmed")}
- className="flex-1 rounded-md bg-emerald-600 py-3 text-sm font-medium text-white transition hover:bg-emerald-700 active:scale-[0.98]"
- >
- 정탐 처리 (C)
- </button>
- <button
- onClick={() =>
- void reviewEvent(selectedEvent.event_id, "false_positive")
- }
- className="flex-1 rounded-md bg-red-600 py-3 text-sm font-medium text-white transition hover:bg-red-700 active:scale-[0.98]"
- >
- 오탐 처리 (F)
- </button>
- </div>
- <button
- onClick={() => void reviewEvent(selectedEvent.event_id, "dismissed")}
- className="rounded-md border border-neutral-700 bg-neutral-800 py-2.5 text-sm font-medium text-neutral-300 transition hover:bg-neutral-700 active:scale-[0.98]"
- >
- 종료 (D)
- </button>
- <button
- onClick={() => void reviewEvent(selectedEvent.event_id, "new")}
- className="rounded-md border border-neutral-700 bg-neutral-800 py-2.5 text-sm font-medium text-neutral-300 transition hover:bg-neutral-700 active:scale-[0.98]"
- >
- 미확인 복귀 (N)
- </button>
- </div>
- </div>
- ) : (
- <div className="mt-10 text-center text-sm text-neutral-500">
- 선택된 이벤트가 없습니다.
- </div>
- )}
- </aside>
- </>
- )}
+            <div className="mt-auto space-y-3 pb-4">
+              <div className="flex gap-3">
+                <button
+                  onClick={() => void reviewEvent(selectedEvent.event_id, "confirmed")}
+                  className="group relative flex-1 overflow-hidden rounded-xl bg-gradient-to-br from-emerald-600 to-teal-700 py-4 text-[11px] font-black uppercase tracking-widest text-white transition-all hover:scale-[1.02] active:scale-[0.98] shadow-lg shadow-emerald-900/20"
+                >
+                  <div className="absolute inset-0 bg-white/10 opacity-0 transition-opacity group-hover:opacity-100" />
+                  <span className="relative">정탐 처리 (C)</span>
+                </button>
+                <button
+                  onClick={() => void reviewEvent(selectedEvent.event_id, "false_positive")}
+                  className="group relative flex-1 overflow-hidden rounded-xl bg-gradient-to-br from-rose-600 to-red-800 py-4 text-[11px] font-black uppercase tracking-widest text-white transition-all hover:scale-[1.02] active:scale-[0.98] shadow-lg shadow-rose-900/20"
+                >
+                  <div className="absolute inset-0 bg-white/10 opacity-0 transition-opacity group-hover:opacity-100" />
+                  <span className="relative">오탐 처리 (F)</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="mt-10 text-center text-[11px] font-bold uppercase tracking-widest text-neutral-600">
+            NO EVENT SELECTED
+          </div>
+        )}
+      </aside>
+    </div>
+  )}
 
- 
+  {view === "analytics" && (
+  <section className="flex flex-1 flex-col gap-6 overflow-y-auto p-6">
+  <PanelTitle title="통계 요약" />
+  <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
+  <MetricCard label="총 발생" value={analytics?.overview.total_events ?? 0} />
+  <MetricCard label="미확인" value={analytics?.overview.unreviewed_events ?? 0} />
+  <MetricCard label="검토 완료" value={analytics?.overview.reviewed_events ?? 0} />
+  <MetricCard
+  label="평균 신뢰도"
+  value={formatConfidence(analytics?.overview.average_confidence ?? 0)}
+  />
+  </div>
 
- {view === "analytics" && (
- <section className="flex flex-1 flex-col gap-6 overflow-y-auto p-6">
- <PanelTitle title="통계 요약" />
- <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
- <MetricCard label="총 발생" value={analytics?.overview.total_events ?? 0} />
- <MetricCard label="미확인" value={analytics?.overview.unreviewed_events ?? 0} />
- <MetricCard label="검토 완료" value={analytics?.overview.reviewed_events ?? 0} />
- <MetricCard
- label="평균 신뢰도"
- value={formatConfidence(analytics?.overview.average_confidence ?? 0)}
- />
- </div>
+  <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
+  <MetricCard label="최근 5분" value={summary.recent.last_5m} />
+  <MetricCard label="최근 1시간" value={summary.recent.last_1h} />
+  <MetricCard label="최다 발생 카메라" value={topCamera?.camera_name ?? "없음"} />
+  <MetricCard label="현재 시스템 상태" value={systemStateLabel(summary.system_state)} />
+  </div>
 
- <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
- <MetricCard label="최근 5분" value={summary.recent.last_5m} />
- <MetricCard label="최근 1시간" value={summary.recent.last_1h} />
- <MetricCard label="최다 발생 카메라" value={topCamera?.camera_name ?? "없음"} />
- <MetricCard label="현재 시스템 상태" value={systemStateLabel(summary.system_state)} />
- </div>
+  <div className="grid grid-cols-1 gap-4 xl:grid-cols-4">
+  <article className=" border border-neutral-800 bg-neutral-800 p-5">
+  <PanelTitle title="시간대별 이벤트 추이" />
+  <div className="h-32 mt-2">
+  {trendValues.length ? (
+  <TinyTrendBars values={trendValues} labels={trendLabels} />
+  ) : (
+  <div className="flex h-full items-center justify-center text-sm text-neutral-500">
+  데이터 없음
+  </div>
+  )}
+  </div>
+  </article>
 
- <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1.3fr_1fr]">
- <article className=" border border-neutral-800 border-neutral-800 bg-neutral-800 p-5">
- <PanelTitle title="시간대별 이벤트 추이" />
- <div className="h-[220px] rounded-md border border-neutral-800 bg-neutral-900 p-4">
- {trendValues.length ? (
- <TinyTrendBars values={trendValues} labels={trendLabels} />
- ) : (
- <div className="flex h-full items-center justify-center text-sm text-neutral-500">
- 데이터 없음
- </div>
- )}
- </div>
- </article>
-
- <article className=" border border-neutral-800 border-neutral-800 bg-neutral-800 p-5">
- <PanelTitle title="최근 이벤트" />
- <div className="flex flex-col gap-2">
- {(analytics?.recent_events ?? []).length ? (
- analytics?.recent_events.map((event) => (
- <button
- key={event.event_id}
- onClick={() => {
- setSelectedEventId(event.event_id);
- setSelectedCameraId(event.camera_id);
- setView("events");
- }}
- className="rounded-md border border-neutral-800 bg-neutral-900 p-3 text-left transition hover:bg-neutral-800/80"
- >
- <div className="flex items-center justify-between gap-3">
- <span className="text-sm font-medium text-neutral-100">
- {EVENT_LABELS[event.event_type]}
- </span>
- <span
- className={classNames(
- "rounded border px-2 py-1 text-xs font-medium",
- statusTone(event.status),
- )}
- >
- {STATUS_LABELS[event.status]}
- </span>
- </div>
- <div className="mt-1 text-xs text-neutral-400">
- {event.camera_name} · {formatCompactDateTime(event.started_at)}
- </div>
- </button>
- ))
- ) : (
- <div className="text-sm text-neutral-500">최근 이벤트가 없습니다.</div>
- )}
- </div>
- </article>
- </div>
-
- <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
- <article className=" border border-neutral-800 border-neutral-800 bg-neutral-800 p-5">
- <PanelTitle title="유형별 분포" />
- <BarList rows={byTypeRows} />
- </article>
- <article className=" border border-neutral-800 border-neutral-800 bg-neutral-800 p-5">
- <PanelTitle title="상태별 분포" />
- <BarList rows={byStatusRows} />
- </article>
- <article className=" border border-neutral-800 border-neutral-800 bg-neutral-800 p-5">
- <PanelTitle title="카메라별 분포" />
- <BarList rows={byCameraRows} />
- </article>
- </div>
- </section>
- )}
+  <article className=" border border-neutral-800 bg-neutral-800 p-5">
+  <PanelTitle title="유형별 분포" />
+  <BarList rows={byTypeRows} />
+  </article>
+  <article className=" border border-neutral-800 bg-neutral-800 p-5">
+  <PanelTitle title="상태별 분포" />
+  <BarList rows={byStatusRows} />
+  </article>
+  <article className=" border border-neutral-800 bg-neutral-800 p-5">
+  <PanelTitle title="카메라별 분포" />
+  <BarList rows={byCameraRows} />
+  </article>
+  </div>
+  </section>
+  )}
 
  {view === "settings" && (
  <section className="flex-1 overflow-y-auto p-6">
  <PanelTitle title="설정" />
  <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
- <article className=" border border-neutral-800 border-neutral-800 bg-neutral-800 p-5">
+ <article className=" border border-neutral-800 bg-neutral-800 p-5">
  <PanelTitle title="운영 플로우" />
  <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
  <label className="flex flex-col gap-2 text-sm text-neutral-400">
@@ -1598,19 +1382,6 @@ export function DashboardApp() {
  </select>
  </label>
  <label className="flex flex-col gap-2 text-sm text-neutral-400">
- <span>기본 영상 모드</span>
- <select
- value={videoMode}
- onChange={(event) =>
- setVideoMode(event.target.value as "overlay" | "clip")
- }
- className="rounded-md border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm text-neutral-200 outline-none"
- >
- <option value="overlay">오버레이 우선</option>
- <option value="clip">원본 우선</option>
- </select>
- </label>
- <label className="flex flex-col gap-2 text-sm text-neutral-400">
  <span>폴링 간격</span>
  <select
  value={String(autoRefreshSeconds)}
@@ -1628,7 +1399,7 @@ export function DashboardApp() {
  </div>
  </article>
 
- <article className=" border border-neutral-800 border-neutral-800 bg-neutral-800 p-5">
+ <article className=" border border-neutral-800 bg-neutral-800 p-5">
  <PanelTitle title="실시간 연결" />
  <div className="grid grid-cols-1 gap-3 text-sm">
  <div className="rounded-md border border-neutral-800 bg-neutral-900 px-3 py-2">
@@ -1652,7 +1423,7 @@ export function DashboardApp() {
  </div>
  </article>
 
- <article className=" border border-neutral-800 border-neutral-800 bg-neutral-800 p-5">
+ <article className=" border border-neutral-800 bg-neutral-800 p-5">
  <PanelTitle title="현재 아키텍처" />
  <div className="grid grid-cols-1 gap-3 text-sm md:grid-cols-2">
  <div className="rounded-md border border-neutral-800 bg-neutral-900 px-3 py-2">
@@ -1678,12 +1449,11 @@ export function DashboardApp() {
  </div>
  </article>
 
- <article className=" border border-neutral-800 border-neutral-800 bg-neutral-800 p-5">
+ <article className=" border border-neutral-800 bg-neutral-800 p-5">
  <PanelTitle title="단축키" />
  <div className="grid grid-cols-1 gap-3 text-sm">
  {[
  ["J / K", "다음 이벤트 / 이전 이벤트"],
- ["1 / 2", "원본 보기 / 오버레이 보기"],
  ["C", "정탐 처리"],
  ["F", "오탐 처리"],
  ["D", "종료 처리"],

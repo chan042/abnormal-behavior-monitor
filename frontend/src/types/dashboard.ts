@@ -1,9 +1,11 @@
 export type EventStatus = "new" | "confirmed" | "false_positive" | "dismissed";
 export type EventType = "fall_suspected" | "wandering_suspected";
 export type DashboardView = "live" | "events" | "analytics" | "settings";
+export type DescriptionStatus = "pending" | "completed" | "failed" | "fallback";
 
 export interface SummaryResponse {
   generated_at: string;
+  latest_updated_at?: string | null;
   system_state: string;
   events: {
     total: number;
@@ -40,9 +42,15 @@ export interface DashboardEvent {
   overlay_clip_path: string | null;
   snapshot_path: string | null;
   description: string;
+  description_status: DescriptionStatus;
+  description_source: string;
+  description_generated_at: string | null;
+  description_error: string;
   status: EventStatus;
   operator_note: string;
   reviewed_at: string | null;
+  updated_at: string | null;
+  details?: Record<string, unknown> | null;
   detail_url: string;
   clip_url: string | null;
   overlay_clip_url: string | null;
