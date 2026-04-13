@@ -31,13 +31,17 @@ Run:
 - `python3 -m backend.app.main track --camera-config configs/cameras/example_camera.yaml --max-frames 50 --enable-pose`
 - `python3 -m backend.app.main track --camera-config configs/cameras/example_camera.yaml --max-frames 50 --enable-pose --enable-fall`
 - `python3 -m backend.app.main track --camera-config configs/cameras/example_camera.yaml --max-frames 50 --enable-wandering`
+- `python3 -m backend.app.main track --camera-config configs/cameras/example_live_camera.yaml --enable-wandering`
 - `python3 -m backend.app.main render-overlay --camera-config configs/cameras/fall_real_01.yaml --tracking-log artifacts/logs/fall_real_tracking_log_tuned.jsonl --pose-log artifacts/logs/fall_real_pose_log_tuned.jsonl --event-log artifacts/events/fall_real_events_tuned.jsonl --output artifacts/overlays/fall_real_01_overlay.mp4`
 - `python3 -m backend.app.main attach-overlay-clips --overlay-video artifacts/overlays/fall_real_01_overlay.mp4 --event-log artifacts/events/fall_real_events_tuned.jsonl`
 - `python3 -m backend.app.main build-swoon-manifest --dataset-root swoon_sample_1 --video-output data/manifests/swoon_videos.jsonl --segment-output data/manifests/swoon_segments.jsonl`
+- `python3 -m backend.app.main build-wander-manifest --dataset-root wander_sample_1 --video-output data/manifests/wander_sample_1_videos.jsonl --segment-output data/manifests/wander_sample_1_segments.jsonl`
 - `python3 -m backend.app.main evaluate-fall-manifest --segment-manifest data/manifests/swoon_segments.jsonl --output artifacts/evaluations/swoon_eval_summary.json`
+- `python3 -m backend.app.main evaluate-wandering-manifest --segment-manifest data/manifests/wander_sample_1_segments.jsonl --output artifacts/evaluations/wander_eval_summary.json`
 - `python3 -m backend.app.main evaluate-fall-manifest --segment-manifest data/manifests/swoon_segments.jsonl --fall-thresholds configs/thresholds/fall_swoon_candidate.yaml --output artifacts/evaluations/swoon_eval_summary_tuned.json`
 - `python3 -m backend.app.main evaluate-fall-manifest --segment-manifest data/manifests/swoon_segments.jsonl --fall-thresholds configs/thresholds/fall_swoon_profiled.yaml --output artifacts/evaluations/swoon_eval_summary_profiled.json`
 - `python3 -m backend.app.main build-swoon-review --segment-manifest data/manifests/swoon_segments.jsonl`
+- `python3 -m backend.app.main build-wandering-review --segment-manifest data/manifests/wander_sample_1_segments.jsonl`
 
 When events are emitted, metadata is written to `artifacts/events/` and
 associated clips and snapshots are written to `artifacts/clips/<camera_id>/`
@@ -70,9 +74,11 @@ FastAPI API:
 Current dashboard sections:
 - `실시간 관제`
 - `이벤트 검토`
-- `카메라 상태`
 - `통계/분석`
 - `설정`
+
+Camera status information is exposed through the dashboard and APIs, but it is
+not currently a standalone top-level dashboard section.
 
 Live overlay workflow:
 1. Configure a local camera source in `configs/cameras/example_live_camera.yaml`
@@ -103,6 +109,16 @@ Notes for local webcam / Continuity Camera use:
 - Set `source` to the camera device index as a string such as `"0"` or `"1"`
 - On macOS, iPhone Continuity Camera should appear as a system webcam once connected
 
+Wandering detection configuration:
+- `configs/thresholds/wandering.yaml` supports `profiles:` overrides and optional fields such as `window_seconds`, `max_track_gap_seconds`, `reentry_grace_seconds`, `min_total_distance_pixels`, and `max_idle_ratio`
+- `configs/thresholds/wandering_wander_sample_1.yaml` contains the initial `place-camera` profiles for `wander_sample_1`
+- If `--roi-config` or `--live-roi-config` is omitted, the wandering engine automatically uses the full camera frame as the default detection region (`full_frame` ROI)
+- Camera YAML may optionally set `wandering_threshold_profile`; when omitted, `camera_id` is used as the wandering profile key
+- `demo_mobile` in `configs/thresholds/wandering.yaml` is intended for fixed mobile-camera demos without manual ROI setup
+- ROI YAML may optionally set `axis: x|y` and `event_types: [wandering]` when wandering detection needs to be constrained to selected regions
+- `configs/rois/wandering/` contains the initial evaluation-oriented ROI profiles used by the wandering evaluation CLI
+- Wandering event JSON includes `details` with rule metrics such as dwell time, round trips, direction changes, and path ratio
+
 Evaluation workflow:
 1. `python3 -m backend.app.main build-swoon-manifest --dataset-root swoon_sample_1`
 2. Inspect `data/manifests/swoon_videos.jsonl` and `data/manifests/swoon_segments.jsonl`
@@ -112,3 +128,10 @@ Evaluation workflow:
 6. Camera-specific override profiles can be defined in the same YAML under `profiles:` and selected with `fall_threshold_profile` in camera configs
 7. For the current swoon samples, a profiled threshold file is available at `configs/thresholds/fall_swoon_profiled.yaml`
 8. Build TP/FP review overlays with `python3 -m backend.app.main build-swoon-review --segment-manifest data/manifests/swoon_segments.jsonl`
+
+Wandering dataset workflow:
+1. `python3 -m backend.app.main build-wander-manifest --dataset-root wander_sample_1`
+2. Inspect `data/manifests/wander_sample_1_videos.jsonl` and `data/manifests/wander_sample_1_segments.jsonl`
+3. `python3 -m backend.app.main evaluate-wandering-manifest --segment-manifest data/manifests/wander_sample_1_segments.jsonl --roi-config-root configs/rois/wandering --wandering-thresholds configs/thresholds/wandering_wander_sample_1.yaml`
+4. Inspect per-segment logs under `artifacts/evaluations/wander_eval_summary/` and the JSON summary output
+5. Build TP/FP review overlays with `python3 -m backend.app.main build-wandering-review --segment-manifest data/manifests/wander_sample_1_segments.jsonl --evaluation-summary artifacts/evaluations/wander_eval_summary.json --evaluation-artifact-root artifacts/evaluations/wander_eval_summary`

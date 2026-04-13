@@ -15,7 +15,7 @@
 2. `YOLO track`으로 사람 검출 및 추적
 3. `MediaPipe Pose Landmarker`로 사람별 자세 추출
 4. 규칙 기반 실신 엔진으로 `fall_suspected` 판정
-5. ROI 및 이동 이력 기반 배회 엔진으로 `wandering_suspected` 판정
+5. 전체 영상 영역(full-frame) 기본의 이동 이력 기반 배회 엔진으로 `wandering_suspected` 판정
 6. 이벤트 JSON, clip, snapshot, overlay 저장
 7. 최소 관제 대시보드에서 이벤트 확인
 
@@ -43,7 +43,8 @@
   - 상태 머신 기반 판정
   - threshold/profile 기반 조정 가능
 - 배회 규칙 엔진
-  - ROI 체류시간, 왕복, 방향 전환 기반 판정
+  - full-frame 체류시간, 왕복, 방향 전환 기반 판정
+  - 필요 시 선택적 ROI 적용 가능
 - 이벤트 산출물
   - 이벤트 JSONL
   - clip
@@ -139,7 +140,7 @@
 1. 병원·노인시설과 유사한 실제 CCTV 영상 추가 확보
 2. 현재 `profiled_v2` 규칙으로 동일한 batch evaluation 수행
 3. 현장별 threshold 운영 전략 정리
-4. 필요 시 ROI 기반 후처리 또는 운영자 확인 워크플로우 추가
+4. 필요 시 선택적 ROI 기반 후처리 또는 운영자 확인 워크플로우 추가
 
 ---
 
