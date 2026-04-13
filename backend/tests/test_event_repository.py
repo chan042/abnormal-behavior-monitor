@@ -21,6 +21,7 @@ class EventRepositoryTest(unittest.TestCase):
                 track_id=1,
                 event_type=EventType.WANDERING_SUSPECTED,
                 started_at=datetime.fromtimestamp(1, tz=timezone.utc),
+                details={"round_trips": 2},
             )
             newer = EventRecord(
                 event_id="evt_new",
@@ -38,9 +39,11 @@ class EventRepositoryTest(unittest.TestCase):
             )
 
             repository = EventRepository(event_root)
-            event_ids = [event.record.event_id for event in repository.list_events()]
+            events = repository.list_events()
+            event_ids = [event.record.event_id for event in events]
 
             self.assertEqual(event_ids, ["evt_new", "evt_old"])
+            self.assertEqual(events[1].record.details, {"round_trips": 2})
 
     def test_update_status_rewrites_event_file(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -68,10 +71,12 @@ class EventRepositoryTest(unittest.TestCase):
             self.assertEqual(updated.record.status, "confirmed")
             self.assertEqual(updated.record.operator_note, "운영자 확인 완료")
             self.assertIsNotNone(updated.record.reviewed_at)
+            self.assertIsNotNone(updated.record.updated_at)
             saved_payload = json.loads(event_file.read_text(encoding="utf-8").strip())
             self.assertEqual(saved_payload["status"], "confirmed")
             self.assertEqual(saved_payload["operator_note"], "운영자 확인 완료")
             self.assertIsNotNone(saved_payload["reviewed_at"])
+            self.assertIsNotNone(saved_payload["updated_at"])
 
     def test_summary_and_camera_summaries_are_available(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -112,9 +117,44 @@ class EventRepositoryTest(unittest.TestCase):
             self.assertEqual(summary["events"]["total"], 2)
             self.assertEqual(summary["events"]["fall"], 1)
             self.assertEqual(summary["cameras"]["online"], 2)
+            self.assertIsNotNone(summary["latest_updated_at"])
             self.assertEqual(len(cameras), 2)
             self.assertEqual(analytics["overview"]["total_events"], 2)
             self.assertEqual(len(analytics["by_camera"]), 2)
+
+    def test_llm_demo_event_files_are_excluded_from_dashboard_repository(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            event_root = Path(temp_dir)
+            visible_file = event_root / "events.jsonl"
+            hidden_file = event_root / "llm_demo_track.jsonl"
+            visible = EventRecord(
+                event_id="evt_visible",
+                camera_id="cam01",
+                track_id=1,
+                event_type=EventType.FALL_SUSPECTED,
+                started_at=datetime.now(timezone.utc),
+            )
+            hidden = EventRecord(
+                event_id="evt_hidden",
+                camera_id="cam02",
+                track_id=2,
+                event_type=EventType.FALL_SUSPECTED,
+                started_at=datetime.now(timezone.utc),
+            )
+            visible_file.write_text(
+                json.dumps(visible.to_dict(), ensure_ascii=True) + "\n",
+                encoding="utf-8",
+            )
+            hidden_file.write_text(
+                json.dumps(hidden.to_dict(), ensure_ascii=True) + "\n",
+                encoding="utf-8",
+            )
+
+            repository = EventRepository(event_root)
+            events = repository.list_events()
+
+            self.assertEqual(len(events), 1)
+            self.assertEqual(events[0].record.event_id, "evt_visible")
 
 
 if __name__ == "__main__":

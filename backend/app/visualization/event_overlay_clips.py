@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Dict, List
 
 from ..config import MissingDependencyError
+from ..video.encoding import transcode_mp4_for_web
 
 
 def _load_cv2():
@@ -62,10 +63,13 @@ def attach_overlay_clips(
                 clip_dir.mkdir(parents=True, exist_ok=True)
                 overlay_clip_path = clip_dir / f"{event_id}_overlay.mp4"
 
-                start_ms = max(0, int(source_timestamp_ms) - int(pre_event_seconds * 1000))
-                end_ms = max(start_ms, int(source_timestamp_ms) + int(post_event_seconds * 1000))
-                start_frame = max(0, int((start_ms / 1000.0) * fps))
-                end_frame = min(total_frames - 1, int((end_ms / 1000.0) * fps))
+                start_frame, end_frame = _frame_window(
+                    source_timestamp_ms=int(source_timestamp_ms),
+                    fps=fps,
+                    total_frames=total_frames,
+                    pre_event_seconds=pre_event_seconds,
+                    post_event_seconds=post_event_seconds,
+                )
 
                 _write_segment(
                     cv2=cv2,
@@ -77,6 +81,7 @@ def attach_overlay_clips(
                     start_frame=start_frame,
                     end_frame=end_frame,
                 )
+                transcode_mp4_for_web(overlay_clip_path)
 
                 payload["overlay_clip_path"] = str(overlay_clip_path)
                 updated_payloads.append(payload)
@@ -115,7 +120,7 @@ def _write_segment(
     try:
         capture.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
         current_frame = start_frame
-        while current_frame <= end_frame:
+        while current_frame < end_frame:
             ok, frame = capture.read()
             if not ok:
                 break
@@ -123,3 +128,24 @@ def _write_segment(
             current_frame += 1
     finally:
         writer.release()
+
+
+def _frame_window(
+    source_timestamp_ms: int,
+    fps: float,
+    total_frames: int,
+    pre_event_seconds: float,
+    post_event_seconds: float,
+) -> tuple[int, int]:
+    target_frame_count = max(
+        1,
+        int(round((pre_event_seconds + post_event_seconds) * fps)),
+    )
+    event_frame = int(round((source_timestamp_ms / 1000.0) * fps))
+    start_frame = max(0, event_frame - int(round(pre_event_seconds * fps)))
+    end_frame = min(total_frames, start_frame + target_frame_count)
+
+    if end_frame - start_frame < target_frame_count:
+        start_frame = max(0, end_frame - target_frame_count)
+
+    return start_frame, end_frame

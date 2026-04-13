@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import threading
 import time
 from dataclasses import dataclass, field
@@ -10,21 +9,24 @@ from typing import Dict, List, Optional, Sequence
 from ..config import CameraConfig, MissingDependencyError, load_camera_config
 from ..events.clip_manager import EventClipManager
 from ..events.schema import EventRecord
+from ..events.storage import persist_event_record
 from ..ingestion.frame_source import VideoFrameSource
 from ..paths import ARTIFACT_ROOT, CONFIG_ROOT, DATA_ROOT
 from ..pose.mediapipe_pose import MediaPipePoseExtractor
 from ..pose.types import PoseObservation
 from ..rules.fall import FallEventEngine
-from ..rules.wandering import WanderingEventEngine
-from ..tracking.types import TrackObservation
+from ..rules.wandering import (
+    WanderingEventEngine,
+    WanderingThresholds,
+    build_full_frame_roi_config,
+)
 from ..tracking.yolo_tracker import YoloPersonTracker
+from ..scene_description.service import SceneDescriptionService
 from ..visualization.overlay_renderer import (
     OverlayEventMarker,
-    _draw_event_badge,
-    _draw_header,
-    _draw_pose_landmarks,
-    _draw_tracking_box,
-    _track_color,
+    annotate_frame,
+    marker_from_event,
+    write_event_snapshot,
 )
 
 
@@ -55,6 +57,8 @@ class LiveCameraState:
     last_jpeg: Optional[bytes] = None
     total_events: int = 0
     unreviewed_events: int = 0
+    fall_event_count: int = 0
+    wandering_event_count: int = 0
     preview_mode: str = "live"
     width: int = 0
     height: int = 0
@@ -80,6 +84,7 @@ class LiveMonitorService:
         event_output_root: Path = ARTIFACT_ROOT / "events",
         clip_root: Path = ARTIFACT_ROOT / "clips",
         snapshot_root: Path = ARTIFACT_ROOT / "snapshots",
+        scene_description_service: Optional[SceneDescriptionService] = None,
     ) -> None:
         self.camera_configs = [load_camera_config(path) for path in camera_configs]
         self.model_name = model_name
@@ -97,6 +102,7 @@ class LiveMonitorService:
         self.event_output_root = event_output_root
         self.clip_root = clip_root
         self.snapshot_root = snapshot_root
+        self.scene_description_service = scene_description_service
 
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
@@ -151,8 +157,8 @@ class LiveMonitorService:
                     ),
                     "total_events": state.total_events,
                     "unreviewed_events": state.unreviewed_events,
-                    "fall_events": state.total_events if self.enable_fall else 0,
-                    "wandering_events": 0,
+                    "fall_events": state.fall_event_count,
+                    "wandering_events": state.wandering_event_count,
                     "latest_event_id": state.latest_event_id,
                     "latest_event_type": state.latest_event_type,
                     "latest_event_status": "new" if state.latest_event_id else "new",
@@ -212,6 +218,8 @@ class LiveMonitorService:
                 "timestamp_ms": state.timestamp_ms,
                 "track_count": state.track_count,
                 "pose_track_count": state.pose_track_count,
+                "fall_event_count": state.fall_event_count,
+                "wandering_event_count": state.wandering_event_count,
                 "latest_event_count": state.latest_event_count,
                 "latest_event_id": state.latest_event_id,
                 "latest_event_type": state.latest_event_type,
@@ -242,11 +250,28 @@ class LiveMonitorService:
                 profile=camera_config.fall_threshold_profile or camera_config.camera_id,
             )
         wandering_engine = None
-        if self.enable_wandering and self.roi_config_path is not None:
-            wandering_engine = WanderingEventEngine.from_yaml(
-                roi_path=self.roi_config_path,
-                threshold_path=self.wandering_threshold_path,
+        if self.enable_wandering:
+            wandering_profile = (
+                camera_config.wandering_threshold_profile or camera_config.camera_id
             )
+            if self.roi_config_path is not None:
+                wandering_engine = WanderingEventEngine.from_yaml(
+                    roi_path=self.roi_config_path,
+                    threshold_path=self.wandering_threshold_path,
+                    profile=wandering_profile,
+                )
+            else:
+                wandering_engine = WanderingEventEngine(
+                    roi_config=build_full_frame_roi_config(
+                        camera_id=camera_config.camera_id,
+                        frame_width=camera_config.frame_width,
+                        frame_height=camera_config.frame_height,
+                    ),
+                    thresholds=WanderingThresholds.from_yaml(
+                        self.wandering_threshold_path,
+                        profile=wandering_profile,
+                    ),
+                )
 
         frame_source = VideoFrameSource(camera_config)
         clip_manager = EventClipManager(
@@ -256,7 +281,6 @@ class LiveMonitorService:
         )
         event_file_path = self.event_output_root / f"live_{camera_config.camera_id}.jsonl"
         event_file_path.parent.mkdir(parents=True, exist_ok=True)
-        event_file = event_file_path.open("a", encoding="utf-8")
 
         try:
             while not self._stop_event.is_set():
@@ -303,39 +327,34 @@ class LiveMonitorService:
                                     emitted_events.append(event)
 
                         for event in emitted_events:
-                            event_file.write(json.dumps(event.to_dict(), ensure_ascii=True) + "\n")
-                            event_file.flush()
-                            live_markers.append(
-                                OverlayEventMarker(
-                                    event_id=event.event_id,
-                                    track_id=event.track_id,
-                                    event_type=event.event_type.value,
-                                    source_timestamp_ms=event.source_timestamp_ms or packet.timestamp_ms,
-                                    confidence=event.confidence,
+                            if event.snapshot_path:
+                                write_event_snapshot(
+                                    cv2,
+                                    Path(event.snapshot_path),
+                                    packet.frame,
+                                    observations=observations,
+                                    pose_by_track=pose_by_track,
+                                    event_marker=marker_from_event(event),
                                 )
+                            persist_event_record(
+                                event_file_path,
+                                event,
+                                scene_description_service=self.scene_description_service,
+                            )
+                            live_markers.append(
+                                marker_from_event(event)
                             )
 
-                        overlay_frame = packet.frame.copy()
-                        for observation in observations:
-                            color = _track_color(observation.track_id)
-                            _draw_tracking_box(cv2, overlay_frame, observation, color)
-                            pose_observation = pose_by_track.get(observation.track_id)
-                            if pose_observation is not None:
-                                _draw_pose_landmarks(cv2, overlay_frame, pose_observation, color)
-                            track_markers = [
-                                marker for marker in live_markers if marker.track_id == observation.track_id
-                            ]
-                            if track_markers:
-                                _draw_event_badge(cv2, overlay_frame, observation, track_markers)
-
-                        _draw_header(
+                        overlay_frame = annotate_frame(
                             cv2,
-                            overlay_frame,
+                            packet.frame,
+                            observations=observations,
+                            pose_by_track=pose_by_track,
+                            event_markers=live_markers,
                             camera_id=camera_config.camera_id,
                             frame_index=packet.frame_index,
                             timestamp_ms=packet.timestamp_ms,
-                            track_count=len(observations),
-                            event_count=len(emitted_events),
+                            include_header=True,
                         )
 
                         encoded_ok, encoded = cv2.imencode(
@@ -346,6 +365,16 @@ class LiveMonitorService:
                         if not encoded_ok:
                             continue
 
+                        fall_events_delta = sum(
+                            1
+                            for event in emitted_events
+                            if event.event_type.value == "fall_suspected"
+                        )
+                        wandering_events_delta = sum(
+                            1
+                            for event in emitted_events
+                            if event.event_type.value == "wandering_suspected"
+                        )
                         self._update_state(
                             camera_id=camera_config.camera_id,
                             stream_status="online",
@@ -367,6 +396,8 @@ class LiveMonitorService:
                             width=overlay_frame.shape[1],
                             height=overlay_frame.shape[0],
                             total_events_delta=len(emitted_events),
+                            fall_events_delta=fall_events_delta,
+                            wandering_events_delta=wandering_events_delta,
                         )
                 except Exception as exc:  # pragma: no cover - runtime dependent
                     self._update_state(
@@ -376,7 +407,6 @@ class LiveMonitorService:
                     )
                     time.sleep(1.5)
         finally:
-            event_file.close()
             clip_manager.close()
             if pose_extractor is not None:
                 pose_extractor.close()
@@ -399,6 +429,8 @@ class LiveMonitorService:
         width: Optional[int] = None,
         height: Optional[int] = None,
         total_events_delta: int = 0,
+        fall_events_delta: int = 0,
+        wandering_events_delta: int = 0,
     ) -> None:
         with self._lock:
             state = self._states[camera_id]
@@ -433,6 +465,10 @@ class LiveMonitorService:
             if total_events_delta:
                 state.total_events += total_events_delta
                 state.unreviewed_events += total_events_delta
+            if fall_events_delta:
+                state.fall_event_count += fall_events_delta
+            if wandering_events_delta:
+                state.wandering_event_count += wandering_events_delta
 
 
 def _isoformat_monotonic(value: Optional[float]) -> Optional[str]:

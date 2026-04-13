@@ -174,10 +174,12 @@ class FastApiAppTest(unittest.TestCase):
             response = client.get("/api/events")
             self.assertEqual(response.status_code, 200)
             self.assertEqual(response.json()["count"], 1)
+            self.assertEqual(response.json()["items"][0]["description_status"], "fallback")
 
             summary = client.get("/api/summary")
             self.assertEqual(summary.status_code, 200)
             self.assertEqual(summary.json()["events"]["total"], 1)
+            self.assertIsNotNone(summary.json()["latest_updated_at"])
 
             update = client.post(
                 "/api/events/evt_fastapi_01/status",
@@ -185,6 +187,10 @@ class FastApiAppTest(unittest.TestCase):
             )
             self.assertEqual(update.status_code, 200)
             self.assertEqual(update.json()["status"], "confirmed")
+            self.assertIsNotNone(update.json()["updated_at"])
+            refreshed_summary = client.get("/api/summary")
+            self.assertEqual(refreshed_summary.status_code, 200)
+            self.assertIsNotNone(refreshed_summary.json()["latest_updated_at"])
 
             clip = client.get("/api/events/evt_fastapi_01/clip")
             self.assertEqual(clip.status_code, 200)

@@ -53,6 +53,9 @@ class FallEventEngineTest(unittest.TestCase):
         self.assertEqual(emitted_events[0].camera_id, "cam_01")
         self.assertEqual(emitted_events[0].track_id, 7)
         self.assertEqual(emitted_events[0].event_type.value, "fall_suspected")
+        self.assertIsNotNone(emitted_events[0].details)
+        self.assertEqual(emitted_events[0].details["phase"], "FALL_CONFIRMED")
+        self.assertEqual(len(emitted_events[0].details["target_bbox"]), 4)
 
     def test_does_not_emit_for_upright_motion(self) -> None:
         samples = [

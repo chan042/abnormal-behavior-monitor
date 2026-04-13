@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import json
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from functools import lru_cache
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+
+import numpy as np
 
 from ..config import CameraConfig, MissingDependencyError, load_camera_config
 from ..events.schema import EventType
@@ -33,6 +36,16 @@ POSE_CONNECTIONS: Sequence[Tuple[int, int]] = (
     (30, 32),
 )
 
+OVERLAY_FONT_CANDIDATES: Sequence[Path] = (
+    Path("/System/Library/Fonts/AppleSDGothicNeo.ttc"),
+    Path("/System/Library/Fonts/Supplemental/AppleGothic.ttf"),
+    Path("/System/Library/Fonts/Supplemental/Arial Unicode.ttf"),
+    Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
+    Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc"),
+    Path("/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc"),
+    Path("/usr/share/fonts/truetype/nanum/NanumGothic.ttf"),
+)
+
 
 def _load_cv2():
     try:
@@ -44,6 +57,72 @@ def _load_cv2():
     return cv2
 
 
+def _load_pil():
+    try:
+        from PIL import Image, ImageDraw, ImageFont  # type: ignore
+    except ModuleNotFoundError:
+        return None
+    return Image, ImageDraw, ImageFont
+
+
+@lru_cache(maxsize=1)
+def _resolve_overlay_font_path() -> Optional[Path]:
+    for candidate in OVERLAY_FONT_CANDIDATES:
+        if candidate.exists():
+            return candidate
+    return None
+
+
+@lru_cache(maxsize=16)
+def _load_overlay_font(font_size: int):
+    pil_modules = _load_pil()
+    if pil_modules is None:
+        return None
+    _, _, image_font = pil_modules
+    font_path = _resolve_overlay_font_path()
+    if font_path is None:
+        return None
+    try:
+        return image_font.truetype(str(font_path), font_size)
+    except OSError:
+        return None
+
+
+def _measure_overlay_text(text: str, font_size: int) -> Optional[Tuple[object, Tuple[int, int, int, int]]]:
+    pil_modules = _load_pil()
+    if pil_modules is None:
+        return None
+    image_class, image_draw_class, _ = pil_modules
+    font = _load_overlay_font(font_size)
+    if font is None:
+        return None
+
+    image = image_class.new("RGB", (8, 8))
+    draw = image_draw_class.Draw(image)
+    bbox = draw.textbbox((0, 0), text, font=font)
+    return font, bbox
+
+
+def _draw_unicode_text(
+    frame: object,
+    text: str,
+    origin: Tuple[int, int],
+    *,
+    font: object,
+    color: Tuple[int, int, int],
+) -> bool:
+    pil_modules = _load_pil()
+    if pil_modules is None:
+        return False
+    image_class, image_draw_class, _ = pil_modules
+
+    image = image_class.fromarray(frame[:, :, ::-1])
+    draw = image_draw_class.Draw(image)
+    draw.text(origin, text, font=font, fill=(color[2], color[1], color[0]))
+    frame[:, :] = np.asarray(image)[:, :, ::-1]
+    return True
+
+
 @dataclass
 class OverlayEventMarker:
     event_id: str
@@ -51,6 +130,28 @@ class OverlayEventMarker:
     event_type: str
     source_timestamp_ms: int
     confidence: float
+
+
+@dataclass
+class OverlayTrackingIndex:
+    by_frame: Dict[int, List[TrackObservation]]
+    by_timestamp: Dict[int, List[TrackObservation]]
+
+
+@dataclass
+class OverlayPoseIndex:
+    by_frame: Dict[int, Dict[int, PoseObservation]]
+    by_timestamp: Dict[int, Dict[int, PoseObservation]]
+
+
+def marker_from_event(event: object) -> OverlayEventMarker:
+    return OverlayEventMarker(
+        event_id=str(event.event_id),
+        track_id=int(event.track_id),
+        event_type=str(event.event_type.value),
+        source_timestamp_ms=int(event.source_timestamp_ms or 0),
+        confidence=float(event.confidence),
+    )
 
 
 def render_overlay_video(
@@ -63,6 +164,8 @@ def render_overlay_video(
     event_window_seconds: float = 3.0,
     start_ms: Optional[int] = None,
     end_ms: Optional[int] = None,
+    observation_frame_width: Optional[int] = None,
+    observation_frame_height: Optional[int] = None,
 ) -> Dict[str, object]:
     camera_config = load_camera_config(camera_config_path)
     return render_overlay_video_for_camera(
@@ -75,6 +178,8 @@ def render_overlay_video(
         event_window_seconds=event_window_seconds,
         start_ms=start_ms,
         end_ms=end_ms,
+        observation_frame_width=observation_frame_width,
+        observation_frame_height=observation_frame_height,
     )
 
 
@@ -88,12 +193,18 @@ def render_overlay_video_for_camera(
     event_window_seconds: float = 3.0,
     start_ms: Optional[int] = None,
     end_ms: Optional[int] = None,
+    observation_frame_width: Optional[int] = None,
+    observation_frame_height: Optional[int] = None,
 ) -> Dict[str, object]:
     cv2 = _load_cv2()
     frame_source = VideoFrameSource(camera_config)
 
     tracking_index = _load_tracking_index(tracking_log_path)
-    pose_index = _load_pose_index(pose_log_path) if pose_log_path else {}
+    pose_index = (
+        _load_pose_index(pose_log_path)
+        if pose_log_path
+        else OverlayPoseIndex(by_frame={}, by_timestamp={})
+    )
     event_markers = (
         _load_event_markers(event_log_path)
         if event_log_path and event_log_path.exists()
@@ -115,14 +226,17 @@ def render_overlay_video_for_camera(
             start_ms=start_ms,
             end_ms=end_ms,
         ):
-            frame = packet.frame.copy()
-            observations = tracking_index.get(packet.frame_index, [])
-            pose_by_track = pose_index.get(packet.frame_index, {})
-            events = [
-                marker
-                for marker in event_markers
-                if abs(packet.timestamp_ms - marker.source_timestamp_ms) <= event_window_ms
-            ]
+            observations = tracking_index.by_timestamp.get(packet.timestamp_ms)
+            if observations is None:
+                observations = tracking_index.by_frame.get(packet.frame_index, [])
+            pose_by_track = pose_index.by_timestamp.get(packet.timestamp_ms)
+            if pose_by_track is None:
+                pose_by_track = pose_index.by_frame.get(packet.frame_index, {})
+            events = _active_event_markers(
+                event_markers,
+                timestamp_ms=packet.timestamp_ms,
+                event_window_ms=event_window_ms,
+            )
 
             if observations:
                 frames_with_tracks += 1
@@ -131,32 +245,18 @@ def render_overlay_video_for_camera(
             if events:
                 frames_with_events += 1
 
-            self_events_by_track = defaultdict(list)
-            for marker in events:
-                self_events_by_track[marker.track_id].append(marker)
-
-            for observation in observations:
-                track_color = _track_color(observation.track_id)
-                _draw_tracking_box(cv2, frame, observation, track_color)
-                pose_observation = pose_by_track.get(observation.track_id)
-                if pose_observation:
-                    _draw_pose_landmarks(cv2, frame, pose_observation, track_color)
-                if observation.track_id in self_events_by_track:
-                    _draw_event_badge(
-                        cv2,
-                        frame,
-                        observation,
-                        self_events_by_track[observation.track_id],
-                    )
-
-            _draw_header(
+            frame = annotate_frame(
                 cv2,
-                frame,
+                packet.frame,
+                observations=observations,
+                pose_by_track=pose_by_track,
+                event_markers=events,
                 camera_id=camera_config.camera_id,
                 frame_index=packet.frame_index,
                 timestamp_ms=packet.timestamp_ms,
-                track_count=len(observations),
-                event_count=len(events),
+                include_header=True,
+                observation_frame_width=observation_frame_width,
+                observation_frame_height=observation_frame_height,
             )
 
             if writer is None:
@@ -187,8 +287,155 @@ def render_overlay_video_for_camera(
     }
 
 
-def _load_tracking_index(path: Path) -> Dict[int, List[TrackObservation]]:
+def annotate_frame(
+    cv2: object,
+    frame: object,
+    observations: Sequence[TrackObservation],
+    pose_by_track: Dict[int, PoseObservation],
+    event_markers: Sequence[OverlayEventMarker],
+    camera_id: Optional[str] = None,
+    frame_index: Optional[int] = None,
+    timestamp_ms: Optional[int] = None,
+    include_header: bool = True,
+    observation_frame_width: Optional[int] = None,
+    observation_frame_height: Optional[int] = None,
+) -> object:
+    annotated = frame.copy()
+    scale_x, scale_y = _observation_scale(
+        frame,
+        observation_frame_width=observation_frame_width,
+        observation_frame_height=observation_frame_height,
+    )
+    scaled_observations = [
+        _scale_track_observation(observation, scale_x=scale_x, scale_y=scale_y)
+        for observation in observations
+    ]
+    scaled_pose_by_track = {
+        track_id: _scale_pose_observation(
+            pose_observation,
+            scale_x=scale_x,
+            scale_y=scale_y,
+        )
+        for track_id, pose_observation in pose_by_track.items()
+    }
+    events_by_track = _group_markers_by_track(event_markers)
+
+    for observation in scaled_observations:
+        track_color = _track_color(observation.track_id)
+        _draw_tracking_box(cv2, annotated, observation, track_color)
+        pose_observation = scaled_pose_by_track.get(observation.track_id)
+        if pose_observation:
+            _draw_pose_landmarks(cv2, annotated, pose_observation, track_color)
+        track_events = events_by_track.get(observation.track_id, [])
+        if track_events:
+            _draw_event_highlight(cv2, annotated, observation)
+            _draw_event_badge(
+                cv2,
+                annotated,
+                observation,
+                track_events,
+            )
+
+    if include_header and camera_id is not None and frame_index is not None and timestamp_ms is not None:
+        _draw_header(
+            cv2,
+            annotated,
+            camera_id=camera_id,
+            frame_index=frame_index,
+            timestamp_ms=timestamp_ms,
+            track_count=len(scaled_observations),
+            event_count=len(event_markers),
+        )
+    return annotated
+
+
+def write_event_snapshot(
+    cv2: object,
+    output_path: Path,
+    frame: object,
+    observations: Sequence[TrackObservation],
+    pose_by_track: Dict[int, PoseObservation],
+    event_marker: OverlayEventMarker,
+    observation_frame_width: Optional[int] = None,
+    observation_frame_height: Optional[int] = None,
+) -> bool:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    snapshot = annotate_frame(
+        cv2,
+        frame,
+        observations=observations,
+        pose_by_track=pose_by_track,
+        event_markers=[event_marker],
+        include_header=False,
+        observation_frame_width=observation_frame_width,
+        observation_frame_height=observation_frame_height,
+    )
+    return bool(cv2.imwrite(str(output_path), snapshot))
+
+
+def _observation_scale(
+    frame: object,
+    *,
+    observation_frame_width: Optional[int],
+    observation_frame_height: Optional[int],
+) -> Tuple[float, float]:
+    frame_height, frame_width = frame.shape[:2]
+    if (
+        observation_frame_width is None
+        or observation_frame_height is None
+        or observation_frame_width <= 0
+        or observation_frame_height <= 0
+    ):
+        return 1.0, 1.0
+
+    scale_x = frame_width / float(observation_frame_width)
+    scale_y = frame_height / float(observation_frame_height)
+    if abs(scale_x - 1.0) < 1e-6 and abs(scale_y - 1.0) < 1e-6:
+        return 1.0, 1.0
+    return scale_x, scale_y
+
+
+def _scale_track_observation(
+    observation: TrackObservation,
+    *,
+    scale_x: float,
+    scale_y: float,
+) -> TrackObservation:
+    if abs(scale_x - 1.0) < 1e-6 and abs(scale_y - 1.0) < 1e-6:
+        return observation
+    return replace(
+        observation,
+        x1=observation.x1 * scale_x,
+        y1=observation.y1 * scale_y,
+        x2=observation.x2 * scale_x,
+        y2=observation.y2 * scale_y,
+    )
+
+
+def _scale_pose_observation(
+    observation: PoseObservation,
+    *,
+    scale_x: float,
+    scale_y: float,
+) -> PoseObservation:
+    if abs(scale_x - 1.0) < 1e-6 and abs(scale_y - 1.0) < 1e-6:
+        return observation
+    return replace(
+        observation,
+        landmarks=[
+            replace(
+                landmark,
+                x=landmark.x * scale_x,
+                y=landmark.y * scale_y,
+            )
+            for landmark in observation.landmarks
+        ],
+    )
+
+
+def _load_tracking_index(path: Path) -> OverlayTrackingIndex:
     by_frame: Dict[int, List[TrackObservation]] = defaultdict(list)
+    by_timestamp: Dict[int, List[TrackObservation]] = defaultdict(list)
     for payload in _read_jsonl(path):
         x1, y1, x2, y2 = payload["bbox"]
         observation = TrackObservation(
@@ -204,11 +451,16 @@ def _load_tracking_index(path: Path) -> Dict[int, List[TrackObservation]]:
             y2=float(y2),
         )
         by_frame[observation.frame_index].append(observation)
-    return by_frame
+        by_timestamp[observation.timestamp_ms].append(observation)
+    return OverlayTrackingIndex(
+        by_frame=by_frame,
+        by_timestamp=by_timestamp,
+    )
 
 
-def _load_pose_index(path: Path) -> Dict[int, Dict[int, PoseObservation]]:
+def _load_pose_index(path: Path) -> OverlayPoseIndex:
     by_frame: Dict[int, Dict[int, PoseObservation]] = defaultdict(dict)
+    by_timestamp: Dict[int, Dict[int, PoseObservation]] = defaultdict(dict)
     for payload in _read_jsonl(path):
         observation = PoseObservation(
             frame_index=int(payload["frame_index"]),
@@ -218,7 +470,11 @@ def _load_pose_index(path: Path) -> Dict[int, Dict[int, PoseObservation]]:
             landmarks=[PoseLandmarkRecord(**landmark) for landmark in payload["pose_landmarks"]],
         )
         by_frame[observation.frame_index][observation.track_id] = observation
-    return by_frame
+        by_timestamp[observation.timestamp_ms][observation.track_id] = observation
+    return OverlayPoseIndex(
+        by_frame=by_frame,
+        by_timestamp=by_timestamp,
+    )
 
 
 def _load_event_markers(
@@ -250,6 +506,42 @@ def _read_jsonl(path: Path) -> Iterable[Dict[str, object]]:
             payload = json.loads(line)
             if isinstance(payload, dict):
                 yield payload
+
+
+def _group_markers_by_track(
+    markers: Sequence[OverlayEventMarker],
+) -> Dict[int, List[OverlayEventMarker]]:
+    grouped: Dict[int, List[OverlayEventMarker]] = defaultdict(list)
+    for marker in markers:
+        grouped[marker.track_id].append(marker)
+    return grouped
+
+
+def _active_event_markers(
+    markers: Sequence[OverlayEventMarker],
+    *,
+    timestamp_ms: int,
+    event_window_ms: int,
+) -> List[OverlayEventMarker]:
+    return [
+        marker
+        for marker in markers
+        if _is_marker_active(
+            marker,
+            timestamp_ms=timestamp_ms,
+            event_window_ms=event_window_ms,
+        )
+    ]
+
+
+def _is_marker_active(
+    marker: OverlayEventMarker,
+    *,
+    timestamp_ms: int,
+    event_window_ms: int,
+) -> bool:
+    offset_ms = timestamp_ms - marker.source_timestamp_ms
+    return 0 <= offset_ms <= event_window_ms
 
 
 def _draw_tracking_box(
@@ -345,39 +637,101 @@ def _draw_event_badge(
 ) -> None:
     event_type = markers[0].event_type
     confidence = max(marker.confidence for marker in markers)
-    if event_type == EventType.FALL_SUSPECTED.value:
-        label = "FALL ALERT {confidence:.2f}".format(confidence=confidence)
-        color = (38, 46, 215)
-    else:
-        label = "EVENT {confidence:.2f}".format(confidence=confidence)
-        color = (23, 113, 230)
+    event_label = (
+        "실신 의심"
+        if event_type == EventType.FALL_SUSPECTED.value
+        else "배회 의심"
+    )
+    label = "AI EVENT | {event_label} | {confidence:.2f}".format(
+        event_label=event_label,
+        confidence=confidence,
+    )
+    fill_color = (28, 46, 215)
+    accent_color = (255, 255, 255)
+    font_size = 20
 
     x1 = int(round(observation.x1))
     y1 = int(round(observation.y1))
-    (text_width, text_height), _ = cv2.getTextSize(
-        label,
-        cv2.FONT_HERSHEY_DUPLEX,
-        0.65,
-        2,
+    font_metrics = _measure_overlay_text(label, font_size)
+    if font_metrics is not None:
+        font, text_bbox = font_metrics
+        text_width = text_bbox[2] - text_bbox[0]
+        text_height = text_bbox[3] - text_bbox[1]
+    else:
+        font = None
+        (text_width, text_height), _ = cv2.getTextSize(
+            label,
+            cv2.FONT_HERSHEY_DUPLEX,
+            0.58,
+            2,
+        )
+    badge_width = min(
+        max(text_width + 14, 360),
+        max(80, frame.shape[1] - x1 - 4),
     )
-    top = max(10, y1 - 42)
+    top = max(10, y1 - 46)
     cv2.rectangle(
         frame,
         (x1, top),
-        (x1 + text_width + 12, top + text_height + 12),
-        color,
+        (x1 + badge_width, top + text_height + 14),
+        fill_color,
         -1,
     )
+    cv2.rectangle(
+        frame,
+        (x1, top),
+        (x1 + badge_width, top + text_height + 14),
+        accent_color,
+        2,
+    )
+    pointer_x = x1 + 18
+    pointer_top = top + text_height + 14
+    cv2.line(frame, (pointer_x, pointer_top), (x1 + 10, y1 - 4), accent_color, 2)
+    if font is not None and font_metrics is not None:
+        _draw_unicode_text(
+            frame,
+            label,
+            (
+                x1 + 7 - text_bbox[0],
+                top + 7 - text_bbox[1],
+            ),
+            font=font,
+            color=(255, 255, 255),
+        )
+        return
     cv2.putText(
         frame,
         label,
-        (x1 + 6, top + text_height + 2),
+        (x1 + 7, top + text_height + 3),
         cv2.FONT_HERSHEY_DUPLEX,
-        0.65,
+        0.58,
         (255, 255, 255),
         2,
         cv2.LINE_AA,
     )
+
+
+def _draw_event_highlight(
+    cv2: object,
+    frame: object,
+    observation: TrackObservation,
+) -> None:
+    x1 = int(round(observation.x1))
+    y1 = int(round(observation.y1))
+    x2 = int(round(observation.x2))
+    y2 = int(round(observation.y2))
+    color = (28, 46, 215)
+
+    cv2.rectangle(frame, (x1, y1), (x2, y2), color, 4)
+    corner = max(12, min((x2 - x1) // 4, (y2 - y1) // 4))
+    cv2.line(frame, (x1, y1), (x1 + corner, y1), (255, 255, 255), 2)
+    cv2.line(frame, (x1, y1), (x1, y1 + corner), (255, 255, 255), 2)
+    cv2.line(frame, (x2, y1), (x2 - corner, y1), (255, 255, 255), 2)
+    cv2.line(frame, (x2, y1), (x2, y1 + corner), (255, 255, 255), 2)
+    cv2.line(frame, (x1, y2), (x1 + corner, y2), (255, 255, 255), 2)
+    cv2.line(frame, (x1, y2), (x1, y2 - corner), (255, 255, 255), 2)
+    cv2.line(frame, (x2, y2), (x2 - corner, y2), (255, 255, 255), 2)
+    cv2.line(frame, (x2, y2), (x2, y2 - corner), (255, 255, 255), 2)
 
 
 def _draw_header(

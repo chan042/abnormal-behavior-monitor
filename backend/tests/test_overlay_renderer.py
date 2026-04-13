@@ -8,10 +8,43 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from backend.app.visualization.overlay_renderer import render_overlay_video
+from backend.app.visualization.overlay_renderer import (
+    OverlayEventMarker,
+    _active_event_markers,
+    _draw_event_badge,
+    render_overlay_video,
+)
+from backend.app.tracking.types import TrackObservation
 
 
 class OverlayRendererTest(unittest.TestCase):
+    def test_draw_event_badge_handles_korean_event_label(self) -> None:
+        frame = np.full((120, 200, 3), 220, dtype=np.uint8)
+        observation = TrackObservation(
+            frame_index=0,
+            timestamp_ms=0,
+            track_id=3,
+            class_id=0,
+            class_name="person",
+            confidence=0.93,
+            x1=24.0,
+            y1=44.0,
+            x2=80.0,
+            y2=112.0,
+        )
+        marker = OverlayEventMarker(
+            event_id="evt_korean",
+            track_id=3,
+            event_type="wandering_suspected",
+            source_timestamp_ms=0,
+            confidence=1.0,
+        )
+
+        _draw_event_badge(cv2, frame, observation, [marker])
+
+        badge_region = frame[0:40, 20:190]
+        self.assertGreater(np.abs(badge_region.astype(np.int16) - 220).mean(), 5.0)
+
     def test_render_overlay_video_creates_output(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
@@ -120,6 +153,233 @@ class OverlayRendererTest(unittest.TestCase):
             self.assertEqual(summary["frames_with_pose"], 1)
             self.assertTrue(overlay_output.exists())
             self.assertGreater(overlay_output.stat().st_size, 0)
+
+    def test_render_overlay_video_matches_by_timestamp_for_offset_windows(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            source_video = temp_path / "sample.mp4"
+            camera_config = temp_path / "camera.yaml"
+            tracking_log = temp_path / "tracking.jsonl"
+            pose_log = temp_path / "pose.jsonl"
+            overlay_output = temp_path / "overlay.mp4"
+
+            writer = cv2.VideoWriter(
+                str(source_video),
+                cv2.VideoWriter_fourcc(*"mp4v"),
+                4.0,
+                (160, 120),
+            )
+            try:
+                for _ in range(6):
+                    frame = np.full((120, 160, 3), 230, dtype=np.uint8)
+                    writer.write(frame)
+            finally:
+                writer.release()
+
+            camera_config.write_text(
+                "\n".join(
+                    [
+                        "camera_id: cam_overlay_test",
+                        "name: overlay_test",
+                        "source_type: file",
+                        f"source: {source_video}",
+                        "enabled: true",
+                        "target_fps: 4",
+                        "frame_width: 160",
+                        "frame_height: 120",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            tracking_log.write_text(
+                json.dumps(
+                    {
+                        "frame_index": 3,
+                        "timestamp_ms": 1000,
+                        "track_id": 7,
+                        "class_id": 0,
+                        "class_name": "person",
+                        "confidence": 0.9,
+                        "bbox": [30.0, 20.0, 90.0, 110.0],
+                        "camera_id": "cam_overlay_test",
+                    },
+                    ensure_ascii=True,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            pose_log.write_text(
+                json.dumps(
+                    {
+                        "frame_index": 3,
+                        "timestamp_ms": 1000,
+                        "track_id": 7,
+                        "pose_confidence": 0.8,
+                        "pose_landmarks": [
+                            {"index": 11, "x": 45.0, "y": 40.0, "z": 0.0, "visibility": 0.9},
+                            {"index": 12, "x": 70.0, "y": 40.0, "z": 0.0, "visibility": 0.9},
+                        ],
+                        "camera_id": "cam_overlay_test",
+                    },
+                    ensure_ascii=True,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            summary = render_overlay_video(
+                camera_config_path=camera_config,
+                tracking_log_path=tracking_log,
+                pose_log_path=pose_log,
+                output_path=overlay_output,
+                start_ms=750,
+                end_ms=1250,
+            )
+
+            self.assertGreaterEqual(summary["frames_rendered"], 1)
+            self.assertEqual(summary["frames_with_tracks"], 1)
+            self.assertEqual(summary["frames_with_pose"], 1)
+            self.assertTrue(overlay_output.exists())
+            self.assertGreater(overlay_output.stat().st_size, 0)
+
+    def test_event_markers_only_activate_after_detection_timestamp(self) -> None:
+        marker = OverlayEventMarker(
+            event_id="evt_01",
+            track_id=7,
+            event_type="fall_suspected",
+            source_timestamp_ms=3000,
+            confidence=0.88,
+        )
+
+        before_event = _active_event_markers(
+            [marker],
+            timestamp_ms=2800,
+            event_window_ms=3000,
+        )
+        at_event = _active_event_markers(
+            [marker],
+            timestamp_ms=3000,
+            event_window_ms=3000,
+        )
+        after_event = _active_event_markers(
+            [marker],
+            timestamp_ms=5200,
+            event_window_ms=3000,
+        )
+        expired = _active_event_markers(
+            [marker],
+            timestamp_ms=6201,
+            event_window_ms=3000,
+        )
+
+        self.assertEqual(before_event, [])
+        self.assertEqual(at_event, [marker])
+        self.assertEqual(after_event, [marker])
+        self.assertEqual(expired, [])
+
+    def test_render_overlay_video_scales_tracking_coordinates_to_output_frame(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            source_video = temp_path / "sample.mp4"
+            camera_config = temp_path / "camera.yaml"
+            tracking_log = temp_path / "tracking.jsonl"
+            event_log = temp_path / "events.jsonl"
+            overlay_output = temp_path / "overlay.mp4"
+
+            writer = cv2.VideoWriter(
+                str(source_video),
+                cv2.VideoWriter_fourcc(*"mp4v"),
+                4.0,
+                (300, 240),
+            )
+            try:
+                for _ in range(2):
+                    frame = np.full((240, 300, 3), 230, dtype=np.uint8)
+                    writer.write(frame)
+            finally:
+                writer.release()
+
+            camera_config.write_text(
+                "\n".join(
+                    [
+                        "camera_id: cam_overlay_scale_test",
+                        "name: overlay_scale_test",
+                        "source_type: file",
+                        f"source: {source_video}",
+                        "enabled: true",
+                        "target_fps: 4",
+                        "frame_width: 300",
+                        "frame_height: 240",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            tracking_log.write_text(
+                json.dumps(
+                    {
+                        "frame_index": 0,
+                        "timestamp_ms": 0,
+                        "track_id": 1,
+                        "class_id": 0,
+                        "class_name": "person",
+                        "confidence": 0.9,
+                        "bbox": [20.0, 10.0, 60.0, 70.0],
+                        "camera_id": "cam_overlay_scale_test",
+                    },
+                    ensure_ascii=True,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            event_log.write_text(
+                json.dumps(
+                    {
+                        "event_id": "fall_cam_overlay_scale_test_1_0",
+                        "camera_id": "cam_overlay_scale_test",
+                        "track_id": 1,
+                        "event_type": "fall_suspected",
+                        "started_at": "2026-04-02T23:00:00+09:00",
+                        "ended_at": "2026-04-02T23:00:00+09:00",
+                        "source_timestamp_ms": 0,
+                        "confidence": 0.77,
+                        "roi_id": None,
+                        "clip_path": None,
+                        "snapshot_path": None,
+                        "description": "test",
+                        "status": "new",
+                    },
+                    ensure_ascii=True,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            render_overlay_video(
+                camera_config_path=camera_config,
+                tracking_log_path=tracking_log,
+                event_log_path=event_log,
+                output_path=overlay_output,
+                observation_frame_width=100,
+                observation_frame_height=80,
+            )
+
+            capture = cv2.VideoCapture(str(overlay_output))
+            ok, frame = capture.read()
+            capture.release()
+
+            self.assertTrue(ok)
+
+            scaled_region = frame[28:36, 58:66]
+            unscaled_region = frame[8:16, 18:26]
+
+            self.assertGreater(np.abs(scaled_region.astype(np.int16) - 230).mean(), 20.0)
+            self.assertLess(np.abs(unscaled_region.astype(np.int16) - 230).mean(), 5.0)
 
 
 if __name__ == "__main__":

@@ -451,6 +451,21 @@ class FallEventEngine:
             source_timestamp_ms=observation.timestamp_ms,
             confidence=confidence,
             description="실신 의심: 급격한 자세 붕괴 후 움직임이 거의 없음",
+            details={
+                "phase": "FALL_CONFIRMED",
+                "target_bbox": [
+                    round(observation.x1, 3),
+                    round(observation.y1, 3),
+                    round(observation.x2, 3),
+                    round(observation.y2, 3),
+                ],
+                "center_drop_pixels": round(center_drop, 3),
+                "center_drop_ratio": round(center_drop_ratio, 3),
+                "angle_change_degrees": round(angle_change, 3),
+                "aspect_ratio": round(aspect_ratio, 3),
+                "motion_pixels": round(motion_pixels, 3),
+                "pose_confidence": round(pose_observation.confidence, 3),
+            },
         )
 
     def _compute_confidence(

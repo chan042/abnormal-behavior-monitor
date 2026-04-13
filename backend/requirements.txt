@@ -3,6 +3,7 @@ httpx>=0.28.0
 lap>=0.5.12
 mediapipe>=0.10.14
 opencv-python-headless>=4.10.0
+pillow>=11.0.0
 pyyaml>=6.0.2
 ultralytics>=8.3.0
 uvicorn>=0.32.0

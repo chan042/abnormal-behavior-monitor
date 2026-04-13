@@ -1,0 +1,51 @@
+event_type: wandering_suspected
+min_dwell_seconds: 30
+min_round_trips: 2
+min_direction_changes: 4
+min_path_to_displacement_ratio: 2.0
+min_total_distance_pixels: 500
+window_seconds: 90
+max_track_gap_seconds: 2.0
+reentry_grace_seconds: 2.0
+cooldown_seconds: 120
+max_idle_ratio: 0.9
+min_step_pixels: 10
+max_relink_distance_pixels: 260
+profiles:
+  place01_cam01:
+    min_round_trips: 1
+    min_direction_changes: 3
+    min_path_to_displacement_ratio: 1.8
+    min_total_distance_pixels: 360
+    min_axis_excursion_pixels: 100
+    max_idle_ratio: 0.95
+  place02_cam01:
+    min_dwell_seconds: 25
+    min_round_trips: 2
+    min_direction_changes: 4
+    min_path_to_displacement_ratio: 1.8
+    min_total_distance_pixels: 360
+    min_axis_excursion_pixels: 100
+    max_idle_ratio: 0.92
+  place02_cam02:
+    min_dwell_seconds: 25
+    min_round_trips: 2
+    min_direction_changes: 4
+    min_path_to_displacement_ratio: 1.8
+    min_total_distance_pixels: 360
+    min_axis_excursion_pixels: 180
+    max_idle_ratio: 0.88
+  place03_cam01:
+    min_dwell_seconds: 25
+    min_round_trips: 1
+    min_direction_changes: 3
+    min_path_to_displacement_ratio: 1.8
+    min_total_distance_pixels: 420
+    max_idle_ratio: 0.95
+  place03_cam02:
+    min_dwell_seconds: 25
+    min_round_trips: 1
+    min_direction_changes: 2
+    min_path_to_displacement_ratio: 1.8
+    min_total_distance_pixels: 360
+    max_idle_ratio: 0.95

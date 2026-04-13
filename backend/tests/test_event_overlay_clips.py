@@ -4,6 +4,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import cv2
 import numpy as np
@@ -52,19 +53,31 @@ class EventOverlayClipsTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            summary = attach_overlay_clips(
-                overlay_video_path=overlay_video,
-                event_log_path=event_log,
-                output_root=output_root,
-                pre_event_seconds=1.0,
-                post_event_seconds=1.0,
-            )
+            with patch(
+                "backend.app.visualization.event_overlay_clips.transcode_mp4_for_web",
+                return_value=True,
+            ) as mock_transcode:
+                summary = attach_overlay_clips(
+                    overlay_video_path=overlay_video,
+                    event_log_path=event_log,
+                    output_root=output_root,
+                    pre_event_seconds=1.0,
+                    post_event_seconds=1.0,
+                )
 
             self.assertEqual(summary["overlay_event_clips_written"], 1)
             updated_payload = json.loads(event_log.read_text(encoding="utf-8").strip())
             overlay_clip_path = Path(updated_payload["overlay_clip_path"])
             self.assertTrue(overlay_clip_path.exists())
             self.assertGreater(overlay_clip_path.stat().st_size, 0)
+            mock_transcode.assert_called_once_with(overlay_clip_path)
+
+            capture = cv2.VideoCapture(str(overlay_clip_path))
+            try:
+                self.assertTrue(capture.isOpened())
+                self.assertEqual(int(capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0), 10)
+            finally:
+                capture.release()
 
 
 if __name__ == "__main__":

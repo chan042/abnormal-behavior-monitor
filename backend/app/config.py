@@ -39,6 +39,7 @@ class CameraConfig:
     frame_width: int
     frame_height: int
     fall_threshold_profile: Optional[str] = None
+    wandering_threshold_profile: Optional[str] = None
 
 
 @dataclass
@@ -46,6 +47,8 @@ class Roi:
     roi_id: str
     name: str
     points: List[List[int]]
+    axis: Optional[str] = None
+    event_types: Optional[List[str]] = None
 
 
 @dataclass
@@ -70,6 +73,11 @@ def load_camera_config(path: Path) -> CameraConfig:
             if payload.get("fall_threshold_profile") is not None
             else None
         ),
+        wandering_threshold_profile=(
+            str(payload["wandering_threshold_profile"])
+            if payload.get("wandering_threshold_profile") is not None
+            else None
+        ),
     )
 
 
@@ -77,11 +85,27 @@ def load_roi_config(path: Path) -> RoiConfig:
     payload = load_yaml_file(path)
     rois = []
     for roi_payload in payload.get("rois", []):
+        axis = roi_payload.get("axis")
+        if axis is not None:
+            axis = str(axis).lower()
+            if axis not in {"x", "y"}:
+                raise ValueError("ROI axis must be either 'x' or 'y' when provided")
+
+        event_types = roi_payload.get("event_types")
+        if event_types is not None:
+            if not isinstance(event_types, list):
+                raise ValueError("ROI event_types must be a list when provided")
+            normalized_event_types = [str(value).lower() for value in event_types]
+        else:
+            normalized_event_types = None
+
         rois.append(
             Roi(
                 roi_id=str(roi_payload["roi_id"]),
                 name=str(roi_payload.get("name", roi_payload["roi_id"])),
                 points=[[int(x), int(y)] for x, y in roi_payload["points"]],
+                axis=axis,
+                event_types=normalized_event_types,
             )
         )
     return RoiConfig(camera_id=str(payload["camera_id"]), rois=rois)

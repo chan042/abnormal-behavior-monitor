@@ -7,11 +7,13 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
-from ..events.schema import EventRecord, EventType
+from ..events.schema import EventRecord, EventType, event_record_from_dict
+from ..events.storage import update_event_record, utc_now
 from ..paths import PROJECT_ROOT
 
 
 VALID_EVENT_STATUSES = {"new", "confirmed", "false_positive", "dismissed"}
+EXCLUDED_EVENT_FILE_PREFIXES = ("llm_demo_",)
 
 
 @dataclass
@@ -101,34 +103,22 @@ class EventRepository:
         if stored_event is None:
             raise FileNotFoundError(f"Event not found: {event_id}")
 
-        updated_lines: List[str] = []
-        reviewed_at = datetime.now(timezone.utc).isoformat()
-        with stored_event.source_path.open("r", encoding="utf-8") as file:
-            for raw_line in file:
-                line = raw_line.strip()
-                if not line:
-                    continue
-                payload = json.loads(line)
-                if payload.get("event_id") == event_id:
-                    if status is not None:
-                        payload["status"] = status
-                        payload["reviewed_at"] = reviewed_at if status != "new" else None
-                    if operator_note is not None:
-                        payload["operator_note"] = operator_note
-                updated_lines.append(json.dumps(payload, ensure_ascii=True))
-
-        with stored_event.source_path.open("w", encoding="utf-8") as file:
-            for line in updated_lines:
-                file.write(line + "\n")
-
-        refreshed_event = self.get_event(event_id)
-        if refreshed_event is None:
-            raise FileNotFoundError(f"Updated event missing after write: {event_id}")
-        return refreshed_event
+        reviewed_at = utc_now().isoformat()
+        updated = update_event_record(
+            stored_event.source_path,
+            event_id,
+            lambda payload: _apply_review_update(
+                payload=payload,
+                status=status,
+                operator_note=operator_note,
+                reviewed_at=reviewed_at,
+            ),
+        )
+        return StoredEvent(record=updated, source_path=stored_event.source_path)
 
     def get_summary(self) -> Dict[str, object]:
         events = self.list_events()
-        now = datetime.now(timezone.utc)
+        now = utc_now()
         counts_by_type = Counter(event.record.event_type.value for event in events)
         counts_by_status = Counter(event.record.status for event in events)
         camera_ids = {event.record.camera_id for event in events}
@@ -148,6 +138,7 @@ class EventRepository:
             if now - _to_utc(event.record.started_at) <= timedelta(hours=1)
         )
         latest_event = events[0].to_api_dict() if events else None
+        latest_updated_at = self.latest_updated_at(events)
 
         if has_new_fall:
             system_state = "attention"
@@ -157,7 +148,8 @@ class EventRepository:
             system_state = "stable"
 
         return {
-            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "generated_at": now.isoformat(),
+            "latest_updated_at": latest_updated_at,
             "system_state": system_state,
             "events": {
                 "total": len(events),
@@ -179,6 +171,16 @@ class EventRepository:
             },
             "latest_event": latest_event,
         }
+
+    def latest_updated_at(self, events: Optional[List[StoredEvent]] = None) -> Optional[str]:
+        records = events if events is not None else self.list_events()
+        if not records:
+            return None
+        latest = max(
+            _to_utc(item.record.updated_at or item.record.started_at)
+            for item in records
+        )
+        return latest.isoformat()
 
     def get_camera_summaries(self) -> List[Dict[str, object]]:
         grouped: Dict[str, List[StoredEvent]] = defaultdict(list)
@@ -299,7 +301,9 @@ class EventRepository:
         return sorted(
             path
             for path in self.event_root.glob("*.jsonl")
-            if path.is_file() and not path.name.startswith(".")
+            if path.is_file()
+            and not path.name.startswith(".")
+            and not path.name.startswith(EXCLUDED_EVENT_FILE_PREFIXES)
         )
 
     def _read_event_file(self, source_path: Path) -> Iterable[StoredEvent]:
@@ -310,50 +314,9 @@ class EventRepository:
                     continue
                 payload = json.loads(line)
                 yield StoredEvent(
-                    record=_event_from_payload(payload),
+                    record=event_record_from_dict(payload),
                     source_path=source_path,
                 )
-
-
-def _event_from_payload(payload: Dict[str, object]) -> EventRecord:
-    return EventRecord(
-        event_id=str(payload["event_id"]),
-        camera_id=str(payload["camera_id"]),
-        track_id=int(payload["track_id"]),
-        event_type=EventType(str(payload["event_type"])),
-        started_at=datetime.fromisoformat(str(payload["started_at"])),
-        ended_at=(
-            datetime.fromisoformat(str(payload["ended_at"]))
-            if payload.get("ended_at")
-            else None
-        ),
-        source_timestamp_ms=(
-            int(payload["source_timestamp_ms"])
-            if payload.get("source_timestamp_ms") is not None
-            else None
-        ),
-        confidence=float(payload.get("confidence", 0.0)),
-        roi_id=str(payload["roi_id"]) if payload.get("roi_id") is not None else None,
-        clip_path=(
-            str(payload["clip_path"]) if payload.get("clip_path") is not None else None
-        ),
-        overlay_clip_path=(
-            str(payload["overlay_clip_path"])
-            if payload.get("overlay_clip_path") is not None
-            else None
-        ),
-        snapshot_path=(
-            str(payload["snapshot_path"]) if payload.get("snapshot_path") is not None else None
-        ),
-        description=str(payload.get("description", "")),
-        status=str(payload.get("status", "new")),
-        operator_note=str(payload.get("operator_note", "")),
-        reviewed_at=(
-            datetime.fromisoformat(str(payload["reviewed_at"]))
-            if payload.get("reviewed_at")
-            else None
-        ),
-    )
 
 
 def _resolve_artifact_path(raw_path: Optional[str]) -> Optional[Path]:
@@ -369,6 +332,21 @@ def _to_utc(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
+
+
+def _apply_review_update(
+    payload: Dict[str, object],
+    status: Optional[str],
+    operator_note: Optional[str],
+    reviewed_at: str,
+) -> Dict[str, object]:
+    if status is not None:
+        payload["status"] = status
+        payload["reviewed_at"] = reviewed_at if status != "new" else None
+    if operator_note is not None:
+        payload["operator_note"] = operator_note
+    payload["updated_at"] = utc_now().isoformat()
+    return payload
 
 
 def _camera_metadata(camera_id: str) -> Dict[str, str]:

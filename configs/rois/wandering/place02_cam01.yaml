@@ -1,0 +1,11 @@
+camera_id: place02_cam01
+rois:
+  - roi_id: wander_zone
+    name: Wander Zone
+    axis: x
+    event_types: [wandering]
+    points:
+      - [160, 160]
+      - [3680, 160]
+      - [3680, 2000]
+      - [160, 2000]

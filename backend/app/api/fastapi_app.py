@@ -15,6 +15,7 @@ from pydantic import BaseModel
 from ..live.browser_service import BrowserLiveInferenceService
 from ..live.service import LiveMonitorService
 from ..paths import ARTIFACT_ROOT
+from ..scene_description.service import SceneDescriptionService
 from .repository import EventRepository
 from .runtime_state import (
     get_runtime_camera_summaries,
@@ -31,11 +32,20 @@ def create_fastapi_app(
     event_root: Optional[Path] = None,
     live_monitor: Optional[LiveMonitorService] = None,
     browser_live_service: Optional[BrowserLiveInferenceService] = None,
+    scene_description_service: Optional[SceneDescriptionService] = None,
 ) -> FastAPI:
     repository = EventRepository(event_root or (ARTIFACT_ROOT / "events"))
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        if scene_description_service is not None:
+            scene_description_service.start()
+            for event in repository.list_events():
+                if event.record.description_status == "pending":
+                    scene_description_service.enqueue_event(
+                        event=event.record,
+                        source_path=event.source_path,
+                    )
         if live_monitor is not None:
             live_monitor.start()
         try:
@@ -45,6 +55,8 @@ def create_fastapi_app(
                 live_monitor.stop()
             if browser_live_service is not None:
                 browser_live_service.reset()
+            if scene_description_service is not None:
+                scene_description_service.stop()
 
     app = FastAPI(
         title="CCTV Abnormal Behavior Monitor API",
@@ -147,7 +159,7 @@ def create_fastapi_app(
     @app.get("/api/stream")
     async def stream(heartbeat: int = Query(default=5, ge=2, le=60)) -> StreamingResponse:
         async def event_generator() -> AsyncIterator[str]:
-            previous_signature: Optional[tuple[str, int]] = None
+            previous_signature: Optional[tuple[str, int, str]] = None
             while True:
                 payload = repository.get_summary()
                 runtime_cameras, status_source = get_runtime_camera_summaries(
@@ -162,12 +174,14 @@ def create_fastapi_app(
                     )
                 items = repository.list_events()
                 latest_id = items[0].record.event_id if items else None
-                signature = (latest_id or "", len(items))
+                latest_updated_at = repository.latest_updated_at(items)
+                signature = (latest_id or "", len(items), latest_updated_at or "")
                 event_name = "summary" if signature != previous_signature else "heartbeat"
                 body = json.dumps(
                     {
                         "generated_at": payload["generated_at"],
                         "latest_event_id": latest_id,
+                        "latest_updated_at": latest_updated_at,
                         "count": len(items),
                         "system_state": payload["system_state"],
                     },

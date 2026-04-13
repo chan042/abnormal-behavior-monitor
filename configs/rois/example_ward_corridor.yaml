@@ -2,6 +2,8 @@ camera_id: cam_01
 rois:
   - roi_id: ward_corridor_a
     name: Ward Corridor A
+    axis: x
+    event_types: [wandering]
     points:
       - [120, 80]
       - [1160, 80]

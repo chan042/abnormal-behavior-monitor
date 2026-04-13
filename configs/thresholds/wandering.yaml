@@ -1,6 +1,38 @@
 event_type: wandering_suspected
-min_dwell_seconds: 600
-min_round_trips: 4
-min_direction_changes: 6
-min_path_to_displacement_ratio: 3.0
+min_dwell_seconds: 180
+min_round_trips: 3
+min_direction_changes: 5
+min_path_to_displacement_ratio: 2.5
+min_total_distance_pixels: 350
+min_axis_excursion_pixels: 0
+window_seconds: 180
+max_track_gap_seconds: 2.0
+reentry_grace_seconds: 1.0
 cooldown_seconds: 120
+max_idle_ratio: 0.7
+min_step_pixels: 8
+max_relink_distance_pixels: 220
+profiles:
+  cam_01:
+    min_dwell_seconds: 150
+    min_total_distance_pixels: 300
+  demo_mobile:
+    min_dwell_seconds: 20
+    min_round_trips: 2
+    min_direction_changes: 4
+    min_path_to_displacement_ratio: 1.8
+    min_total_distance_pixels: 280
+    min_axis_excursion_pixels: 120
+    max_idle_ratio: 0.95
+    min_step_pixels: 8
+    max_relink_distance_pixels: 260
+  cam_live_01:
+    min_dwell_seconds: 20
+    min_round_trips: 2
+    min_direction_changes: 4
+    min_path_to_displacement_ratio: 1.8
+    min_total_distance_pixels: 280
+    min_axis_excursion_pixels: 120
+    max_idle_ratio: 0.95
+    min_step_pixels: 8
+    max_relink_distance_pixels: 260

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -10,13 +9,15 @@ from typing import Dict, List, Optional
 from ..config import CameraConfig, MissingDependencyError
 from ..events.clip_manager import EventClipManager
 from ..events.schema import EventRecord
+from ..events.storage import persist_event_record
 from ..ingestion.frame_source import FramePacket
 from ..paths import ARTIFACT_ROOT, CONFIG_ROOT, DATA_ROOT
 from ..pose.mediapipe_pose import MediaPipePoseExtractor
 from ..pose.types import PoseObservation
 from ..rules.fall import FallEventEngine
-from ..tracking.types import TrackObservation
+from ..scene_description.service import SceneDescriptionService
 from ..tracking.yolo_tracker import YoloPersonTracker
+from ..visualization.overlay_renderer import marker_from_event, write_event_snapshot
 
 
 def _load_cv2():
@@ -38,7 +39,7 @@ class BrowserSessionRuntime:
     pose_extractor: MediaPipePoseExtractor
     fall_engine: FallEventEngine
     clip_manager: EventClipManager
-    event_file: object
+    event_file_path: Path
     frame_index: int = -1
     total_events: int = 0
     track_count: int = 0
@@ -72,6 +73,7 @@ class BrowserLiveInferenceService:
         default_session_id: str = "browser_desktop_main",
         default_camera_label: str = "브라우저 카메라",
         online_timeout_seconds: int = 5,
+        scene_description_service: Optional[SceneDescriptionService] = None,
     ) -> None:
         self.model_name = model_name
         self.tracker_name = tracker_name
@@ -89,6 +91,7 @@ class BrowserLiveInferenceService:
         self.default_session_id = default_session_id
         self.default_camera_label = default_camera_label
         self.online_timeout_seconds = online_timeout_seconds
+        self.scene_description_service = scene_description_service
         self._runtimes: Dict[str, BrowserSessionRuntime] = {}
 
     def infer_jpeg_frame(
@@ -143,8 +146,21 @@ class BrowserLiveInferenceService:
                 pose_observation=pose,
             ):
                 event = runtime.clip_manager.register_event(event)
-                runtime.event_file.write(json.dumps(event.to_dict(), ensure_ascii=True) + "\n")
-                runtime.event_file.flush()
+                if event.snapshot_path:
+                    cv2 = _load_cv2()
+                    write_event_snapshot(
+                        cv2,
+                        Path(event.snapshot_path),
+                        frame,
+                        observations=tracks,
+                        pose_by_track={item.track_id: item for item in poses},
+                        event_marker=marker_from_event(event),
+                    )
+                persist_event_record(
+                    runtime.event_file_path,
+                    event,
+                    scene_description_service=self.scene_description_service,
+                )
                 runtime.total_events += 1
                 events.append(event)
 
@@ -235,8 +251,6 @@ class BrowserLiveInferenceService:
         )
         event_file_path = self.event_root / "browser_live_events.jsonl"
         event_file_path.parent.mkdir(parents=True, exist_ok=True)
-        event_file = event_file_path.open("a", encoding="utf-8")
-
         runtime = BrowserSessionRuntime(
             session_id=session_id,
             camera_label=camera_label,
@@ -260,7 +274,7 @@ class BrowserLiveInferenceService:
                 snapshot_root=self.snapshot_root,
                 target_fps=self.target_fps,
             ),
-            event_file=event_file,
+            event_file_path=event_file_path,
         )
         self._runtimes[session_id] = runtime
         return runtime
@@ -330,7 +344,6 @@ class BrowserLiveInferenceService:
 
     @staticmethod
     def _close_runtime(runtime: BrowserSessionRuntime) -> None:
-        runtime.event_file.close()
         runtime.clip_manager.close()
         runtime.pose_extractor.close()
 

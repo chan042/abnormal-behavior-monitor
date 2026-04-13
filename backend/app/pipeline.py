@@ -7,13 +7,19 @@ from typing import Dict, Optional
 
 from .config import CameraConfig, load_camera_config
 from .events.clip_manager import EventClipManager
-from .events.schema import EventRecord
+from .events.storage import persist_event_record
 from .ingestion.frame_source import VideoFrameSource
 from .paths import ARTIFACT_ROOT
 from .pose.mediapipe_pose import MediaPipePoseExtractor
 from .rules.fall import FallEventEngine
-from .rules.wandering import WanderingEventEngine
+from .rules.wandering import (
+    WanderingEventEngine,
+    WanderingThresholds,
+    build_full_frame_roi_config,
+)
 from .tracking.yolo_tracker import YoloPersonTracker
+from .scene_description.service import SceneDescriptionService
+from .visualization.overlay_renderer import marker_from_event, write_event_snapshot
 
 
 def run_tracking_pipeline(
@@ -39,6 +45,7 @@ def run_tracking_pipeline(
     end_ms: Optional[int] = None,
     clip_root: Optional[Path] = None,
     snapshot_root: Optional[Path] = None,
+    scene_description_service: Optional[SceneDescriptionService] = None,
 ) -> Dict[str, object]:
     camera_config = load_camera_config(camera_config_path)
     return run_tracking_pipeline_for_camera(
@@ -64,6 +71,7 @@ def run_tracking_pipeline(
         end_ms=end_ms,
         clip_root=clip_root,
         snapshot_root=snapshot_root,
+        scene_description_service=scene_description_service,
     )
 
 
@@ -90,6 +98,7 @@ def run_tracking_pipeline_for_camera(
     end_ms: Optional[int] = None,
     clip_root: Optional[Path] = None,
     snapshot_root: Optional[Path] = None,
+    scene_description_service: Optional[SceneDescriptionService] = None,
 ) -> Dict[str, object]:
     frame_source = VideoFrameSource(camera_config)
     tracker = YoloPersonTracker(
@@ -116,16 +125,31 @@ def run_tracking_pipeline_for_camera(
         )
     wandering_engine = None
     if enable_wandering:
-        if roi_config_path is None:
-            raise ValueError("roi_config_path is required when wandering detection is enabled")
         if wandering_threshold_path is None:
             raise ValueError(
                 "wandering_threshold_path is required when wandering detection is enabled"
             )
-        wandering_engine = WanderingEventEngine.from_yaml(
-            roi_path=roi_config_path,
-            threshold_path=wandering_threshold_path,
+        wandering_profile = (
+            camera_config.wandering_threshold_profile or camera_config.camera_id
         )
+        if roi_config_path is not None:
+            wandering_engine = WanderingEventEngine.from_yaml(
+                roi_path=roi_config_path,
+                threshold_path=wandering_threshold_path,
+                profile=wandering_profile,
+            )
+        else:
+            wandering_engine = WanderingEventEngine(
+                roi_config=build_full_frame_roi_config(
+                    camera_id=camera_config.camera_id,
+                    frame_width=camera_config.frame_width,
+                    frame_height=camera_config.frame_height,
+                ),
+                thresholds=WanderingThresholds.from_yaml(
+                    wandering_threshold_path,
+                    profile=wandering_profile,
+                ),
+            )
     clip_manager = None
     if enable_fall or enable_wandering:
         clip_manager = EventClipManager(
@@ -152,10 +176,6 @@ def run_tracking_pipeline_for_camera(
     pose_file = None
     if enable_pose and pose_output_path is not None:
         pose_file = pose_output_path.open("w", encoding="utf-8")
-    event_file = None
-    if (enable_fall or enable_wandering) and event_output_path is not None:
-        event_file = event_output_path.open("w", encoding="utf-8")
-
     try:
         with output_path.open("w", encoding="utf-8") as output_file:
             for packet in frame_source.iter_frames(
@@ -171,6 +191,9 @@ def run_tracking_pipeline_for_camera(
                     frame_index=packet.frame_index,
                     timestamp_ms=packet.timestamp_ms,
                 )
+                pose_by_track = {}
+                emitted_fall_events = []
+                emitted_wandering_events = []
                 for observation in observations:
                     payload = observation.to_dict()
                     payload["camera_id"] = camera_config.camera_id
@@ -179,7 +202,7 @@ def run_tracking_pipeline_for_camera(
                     unique_track_ids.add(observation.track_id)
                     class_counter[observation.class_name] += 1
 
-                    if wandering_engine and event_file:
+                    if wandering_engine and event_output_path is not None:
                         wandering_events = wandering_engine.update(
                             camera_id=camera_config.camera_id,
                             observation=observation,
@@ -187,9 +210,7 @@ def run_tracking_pipeline_for_camera(
                         for event in wandering_events:
                             if clip_manager:
                                 event = clip_manager.register_event(event)
-                            _write_event(event_file, event)
-                            event_count += 1
-                            wandering_event_count += 1
+                            emitted_wandering_events.append(event)
 
                     if pose_extractor and pose_file:
                         pose_observation = pose_extractor.extract_from_track(
@@ -202,8 +223,9 @@ def run_tracking_pipeline_for_camera(
                         pose_payload["camera_id"] = camera_config.camera_id
                         pose_file.write(json.dumps(pose_payload, ensure_ascii=True) + "\n")
                         pose_observation_count += 1
+                        pose_by_track[observation.track_id] = pose_observation
 
-                        if fall_engine and event_file:
+                        if fall_engine and event_output_path is not None:
                             events = fall_engine.update(
                                 camera_id=camera_config.camera_id,
                                 observation=observation,
@@ -212,9 +234,28 @@ def run_tracking_pipeline_for_camera(
                             for event in events:
                                 if clip_manager:
                                     event = clip_manager.register_event(event)
-                                _write_event(event_file, event)
-                                event_count += 1
-                                fall_event_count += 1
+                                emitted_fall_events.append(event)
+
+                emitted_events = emitted_wandering_events + emitted_fall_events
+                if event_output_path is not None:
+                    for event in emitted_events:
+                        if clip_manager and event.snapshot_path:
+                            write_event_snapshot(
+                                clip_manager._cv2,
+                                Path(event.snapshot_path),
+                                packet.frame,
+                                observations=observations,
+                                pose_by_track=pose_by_track,
+                                event_marker=marker_from_event(event),
+                            )
+                        persist_event_record(
+                            event_output_path,
+                            event,
+                            scene_description_service=scene_description_service,
+                        )
+                    event_count += len(emitted_events)
+                    wandering_event_count += len(emitted_wandering_events)
+                    fall_event_count += len(emitted_fall_events)
     finally:
         if clip_manager:
             clip_manager.close()
@@ -222,9 +263,6 @@ def run_tracking_pipeline_for_camera(
             pose_extractor.close()
         if pose_file:
             pose_file.close()
-        if event_file:
-            event_file.close()
-
     return {
         "camera_id": camera_config.camera_id,
         "source": camera_config.source,
@@ -244,7 +282,3 @@ def run_tracking_pipeline_for_camera(
         "start_ms": start_ms,
         "end_ms": end_ms,
     }
-
-
-def _write_event(event_file: object, event: EventRecord) -> None:
-    event_file.write(json.dumps(event.to_dict(), ensure_ascii=True) + "\n")
